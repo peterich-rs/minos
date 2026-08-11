@@ -458,8 +458,15 @@ pub async fn run_session(mut ws: WebSocket, state: BackendState, upgrade: Gatewa
     )
     .await;
 
-    let close_reason =
-        run_session_inner(&mut ws, &state, &upgrade, &conn, &mut push_rx, &mut revocation_rx).await;
+    let close_reason = run_session_inner(
+        &mut ws,
+        &state,
+        &upgrade,
+        &conn,
+        &mut push_rx,
+        &mut revocation_rx,
+    )
+    .await;
 
     state.subscription_mgr.remove_connection(conn.conn_id);
     let _ = state.registry.remove_current(&conn);

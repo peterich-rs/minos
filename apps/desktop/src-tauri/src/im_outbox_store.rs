@@ -97,10 +97,7 @@ impl ImOutboxStore {
         )?;
         // Optional structured mentions JSON (AppendMessage wire targets).
         // ALTER is idempotent: ignore "duplicate column" on existing DBs.
-        let _ = conn.execute(
-            "ALTER TABLE im_outbox ADD COLUMN mentions_json TEXT",
-            [],
-        );
+        let _ = conn.execute("ALTER TABLE im_outbox ADD COLUMN mentions_json TEXT", []);
         Ok(Self {
             conn: Mutex::new(conn),
         })

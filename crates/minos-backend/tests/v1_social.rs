@@ -1,8 +1,8 @@
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use minos_backend::auth::jwt;
-use minos_backend::http::{router, test_support::backend_state, test_support::TEST_JWT_SECRET};
 use minos_backend::http::test_support::seed_live_connection;
+use minos_backend::http::{router, test_support::backend_state, test_support::TEST_JWT_SECRET};
 use minos_backend::store::test_support::{insert_test_client, insert_test_host};
 use minos_backend::store::{
     agent_sessions, device_installations, durable_event_log, host_commands, host_links, raw_events,
@@ -2645,7 +2645,10 @@ async fn unmatched_host_runtime_mention_does_not_auto_attach_or_enqueue() {
     let count = minos_backend::store::agent_dispatch_queue::count_by_origin(&state.store, &origin)
         .await
         .unwrap();
-    assert_eq!(count, 0, "body @ without structured mentions must not enqueue");
+    assert_eq!(
+        count, 0,
+        "body @ without structured mentions must not enqueue"
+    );
 
     // Structured non-member bot mention is rejected at send time.
     let (status, _body) = common::send(

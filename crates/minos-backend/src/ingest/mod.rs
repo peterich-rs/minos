@@ -462,7 +462,13 @@ pub async fn apply_approval_side_effects_from_payload(
                 })
                 .await?;
 
-            let _ = (turn_id, request_id, approval_method, approval_params, timeout_ms);
+            let _ = (
+                turn_id,
+                request_id,
+                approval_method,
+                approval_params,
+                timeout_ms,
+            );
             Ok(Some(()))
         }
         "approval/timeout" => {

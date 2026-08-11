@@ -49,9 +49,7 @@ impl LocalStore {
             bot_id: r.get("bot_id"),
             session_id: r.get("session_id"),
             status: r.get("status"),
-            accepted: r
-                .get::<Option<i64>, _>("accepted")
-                .map(|v| v != 0),
+            accepted: r.get::<Option<i64>, _>("accepted").map(|v| v != 0),
             last_error: r.get("last_error"),
             created_at_ms: r.get("created_at_ms"),
             updated_at_ms: r.get("updated_at_ms"),
@@ -209,7 +207,9 @@ mod tests {
     #[tokio::test]
     async fn begin_inject_reject_round_trip() {
         let dir = tempdir().unwrap();
-        let store = LocalStore::open(&dir.path().join("t.sqlite")).await.unwrap();
+        let store = LocalStore::open(&dir.path().join("t.sqlite"))
+            .await
+            .unwrap();
         let now = 1_700_000_000_000i64;
         assert_eq!(
             store
@@ -264,7 +264,9 @@ mod tests {
     #[tokio::test]
     async fn clear_inflight_allows_redelivery() {
         let dir = tempdir().unwrap();
-        let store = LocalStore::open(&dir.path().join("t.sqlite")).await.unwrap();
+        let store = LocalStore::open(&dir.path().join("t.sqlite"))
+            .await
+            .unwrap();
         let now = 1_700_000_000_000i64;
         assert_eq!(
             store

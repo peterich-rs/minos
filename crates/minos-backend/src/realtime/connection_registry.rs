@@ -257,6 +257,9 @@ mod tests {
         reg.insert(Arc::clone(&conn));
         assert!(reg.revoke_device(id, ConnectionRevocation::AuthRevoked));
         assert!(reg.get(id).is_none());
-        assert_eq!(*rx.borrow_and_update(), Some(ConnectionRevocation::AuthRevoked));
+        assert_eq!(
+            *rx.borrow_and_update(),
+            Some(ConnectionRevocation::AuthRevoked)
+        );
     }
 }

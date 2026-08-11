@@ -10360,6 +10360,7 @@ class MobileClientImpl extends RustOpaque implements MobileClient {
     clientRequestId: clientRequestId,
   );
 
+  /// `mentions_json` is an optional JSON array of wire `MentionTarget` objects.
   Future<ChatMessageSummary> sendChatMessage({
     required String conversationId,
     required String text,
@@ -10409,7 +10410,7 @@ class MobileClientImpl extends RustOpaque implements MobileClient {
   Stream<AuthStateFrame> subscribeAuthState() => RustLib.instance.api
       .crateApiMinosMobileClientSubscribeAuthState(that: this);
 
-  /// Open-chat live path (R3a): subscribe `conversation:{id}` for full T1 frames.
+  /// Open-chat live path: subscribe `conversation:{id}` for full T1 frames.
   Future<void> subscribeConversation({required String conversationId}) =>
       RustLib.instance.api.crateApiMinosMobileClientSubscribeConversation(
         that: this,
@@ -10446,7 +10447,7 @@ class MobileClientImpl extends RustOpaque implements MobileClient {
     clientOpId: clientOpId,
   );
 
-  /// Leave open-chat conversation topic (R3a).
+  /// Leave open-chat conversation topic.
   Future<void> unsubscribeConversation({required String conversationId}) =>
       RustLib.instance.api.crateApiMinosMobileClientUnsubscribeConversation(
         that: this,

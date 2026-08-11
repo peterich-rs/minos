@@ -150,9 +150,12 @@ pub async fn resolve_dispatch_session_id(
         }
     }
 
-    if let Some(session_id) =
-        social::lookup_latest_session_id_for_conversation_agent(store, conversation_id, &agent.agent_id)
-            .await?
+    if let Some(session_id) = social::lookup_latest_session_id_for_conversation_agent(
+        store,
+        conversation_id,
+        &agent.agent_id,
+    )
+    .await?
     {
         return Ok(Some(session_id));
     }

@@ -366,8 +366,12 @@ async fn auth_exchange_keeps_other_iphone_ws_sessions_for_same_account() {
     )
     .await;
 
-    let (conn_a, mut rx_a) =
-        seed_live_connection(&state, device_a_id, DeviceRole::MobileClient, Some(&account_id));
+    let (conn_a, mut rx_a) = seed_live_connection(
+        &state,
+        device_a_id,
+        DeviceRole::MobileClient,
+        Some(&account_id),
+    );
     let a_revoked = conn_a.subscribe_revocation();
 
     let (status, _body) = post_json(

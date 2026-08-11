@@ -920,10 +920,9 @@ async fn persist_agent_message_with_delivery(
     let now_ms = chrono::Utc::now().timestamp_millis();
 
     // Plan bot→bot hops before opening the write TX (no store reads while holding it).
-    let parent_hop =
-        automation_hop_for_agent_message(&state.store, reply_to_message_id, agent_id)
-            .await
-            .unwrap_or(0);
+    let parent_hop = automation_hop_for_agent_message(&state.store, reply_to_message_id, agent_id)
+        .await
+        .unwrap_or(0);
     let enqueue_hop = parent_hop.saturating_add(1);
     let hop_plans = if !mentioned_agent_ids.is_empty()
         && enqueue_hop <= crate::agent_inbox::MAX_AUTOMATION_HOP
@@ -1616,10 +1615,9 @@ async fn send_agent_message(
         crate::store::social::list_conversation_agents_active(&state.store, &conversation_id)
             .await
             .map_err(|e| err("internal", e.to_string()))?;
-    let all_agents =
-        crate::store::social::list_conversation_agents(&state.store, &conversation_id)
-            .await
-            .map_err(|e| err("internal", e.to_string()))?;
+    let all_agents = crate::store::social::list_conversation_agents(&state.store, &conversation_id)
+        .await
+        .map_err(|e| err("internal", e.to_string()))?;
     let mentions = crate::conversations::use_case::validate_structured_mentions(
         &req.mentions,
         &req.agent_id,
@@ -2413,9 +2411,7 @@ async fn unmatched_structured_agent_intent_error(
             };
             return Ok(Some((
                 "agent_disabled",
-                format!(
-                    "Agent「{label}」已停用，无法投递。请在 Agents 中重新启用后再试。"
-                ),
+                format!("Agent「{label}」已停用，无法投递。请在 Agents 中重新启用后再试。"),
             )));
         }
     }

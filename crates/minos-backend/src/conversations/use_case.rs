@@ -1554,16 +1554,11 @@ mod tests {
             minos_protocol::MentionTarget::account("acct-bob"),
             minos_protocol::MentionTarget::bot("bot-1"),
             minos_protocol::MentionTarget::account("acct-alice"), // self dropped
-            minos_protocol::MentionTarget::bot("bot-2"), // dedupe
+            minos_protocol::MentionTarget::bot("bot-2"),          // dedupe
         ];
-        let mentions = validate_structured_mentions(
-            &structured,
-            "acct-alice",
-            &members,
-            &agents,
-            &agents,
-        )
-        .expect("valid structured mentions");
+        let mentions =
+            validate_structured_mentions(&structured, "acct-alice", &members, &agents, &agents)
+                .expect("valid structured mentions");
         assert_eq!(mentions.account_ids, vec!["acct-bob".to_string()]);
         assert_eq!(
             mentions.agent_ids,
@@ -1576,14 +1571,9 @@ mod tests {
         let members = vec![profile("acct-alice", "alice")];
         let agents = vec![agent("bot-1", "Codex", "codex")];
         let structured = vec![minos_protocol::MentionTarget::bot("bot-missing")];
-        let err = validate_structured_mentions(
-            &structured,
-            "acct-alice",
-            &members,
-            &agents,
-            &agents,
-        )
-        .expect_err("unknown bot must fail");
+        let err =
+            validate_structured_mentions(&structured, "acct-alice", &members, &agents, &agents)
+                .expect_err("unknown bot must fail");
         assert!(err.contains("bot-missing") || err.contains("未匹配"));
     }
 

@@ -775,8 +775,8 @@ mod tests {
 
     #[test]
     fn registry_stamps_disconnect_when_last_mobile_leaves() {
+        use crate::realtime::{wire::ServerFrame, ConnectionState, RealtimeConnectionRegistry};
         use minos_domain::DeviceRole;
-        use crate::realtime::{ConnectionState, RealtimeConnectionRegistry, wire::ServerFrame};
         use minos_protocol::realtime::ConnectionPrincipal;
         use tokio::sync::mpsc;
         let reg = RealtimeConnectionRegistry::new();

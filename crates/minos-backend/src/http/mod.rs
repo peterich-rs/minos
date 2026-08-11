@@ -948,9 +948,9 @@ pub mod test_support {
     use crate::auth::realtime_ticket::RealtimeTicketStore;
     use crate::auth::supabase::SupabaseTokenVerifier;
     use crate::host_link::HostLinkService;
+    use crate::realtime::RealtimeConnectionRegistry;
     use crate::realtime::{MessageBusBackend, PeerTargetCacheBackend};
     use crate::runtime::{AppContext, AppRuntimeConfig};
-    use crate::realtime::RealtimeConnectionRegistry;
     use crate::store::test_support::memory_pool;
     use std::sync::Arc;
     use std::time::Duration;
@@ -996,7 +996,7 @@ pub mod test_support {
         std::sync::Arc<crate::realtime::ConnectionState>,
         tokio::sync::mpsc::Receiver<crate::realtime::wire::ServerFrame>,
     ) {
-        use crate::realtime::{ConnectionState, wire::ServerFrame};
+        use crate::realtime::{wire::ServerFrame, ConnectionState};
         use minos_protocol::realtime::ConnectionPrincipal;
         use tokio::sync::mpsc;
 
@@ -1071,11 +1071,11 @@ mod tests {
 
     use crate::config::{Environment, RuntimeMode, StorageMode, DEFAULT_CLUSTER_CHANNEL};
     use crate::host_link::HostLinkService;
+    use crate::realtime::RealtimeConnectionRegistry;
     use crate::realtime::{
         CacheBackendKind, MessageBusBackend, MessageBusBackendKind, PeerTargetCacheBackend,
     };
     use crate::runtime::{AppContext, AppRuntimeConfig};
-    use crate::realtime::RealtimeConnectionRegistry;
 
     #[tokio::test]
     async fn route_inventory_matches_router() {

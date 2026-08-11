@@ -162,7 +162,6 @@ async fn connect_client(
     Ok(ws)
 }
 
-
 async fn recv_server_frame(ws: &mut WsClient) -> anyhow::Result<ServerFrame> {
     loop {
         let next = timeout(RECV_TIMEOUT, ws.next())

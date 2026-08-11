@@ -2,7 +2,7 @@
 //! Spec R9 — parse(serialize(x)) == x for every wire type, including
 //! the `Raw { raw_kind, payload_json }` fallback.
 //!
-//! 
+//!
 
 use minos_domain::AgentName;
 use minos_ui_protocol::{MessageRole, SessionEndReason, UiEventMessage};
