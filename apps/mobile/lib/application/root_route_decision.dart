@@ -11,19 +11,14 @@ enum RootRoute {
   /// No auth (or refresh failed). Route to the email/password screen.
   login,
 
-  /// Authenticated + paired + WS up (or transient reconnect). Route to
-  /// the project list (new home).
-  projectList,
+  /// Authenticated and connected (or transient reconnect). IM shell home.
+  shell,
 
-  /// Authenticated + paired but the connection to server is offline / WS
-  /// torn down. Same surface as [projectList] visually but expected to render
-  /// an offline banner.
-  projectListOffline,
+  /// Authenticated but account WS offline. Same shell surface with offline chrome.
+  shellOffline,
 }
 
 /// Pure decision matrix gating on auth state first, then connection state.
-/// Pairing is now a user-initiated "Add partner" flow from Profile rather
-/// than a top-level auth gate.
 RootRoute decideRootRoute({
   required AuthState authState,
   required core.ConnectionState? connectionState,
@@ -35,9 +30,9 @@ RootRoute decideRootRoute({
     AuthUnauthenticated() => RootRoute.login,
     AuthRefreshFailed() => RootRoute.login,
     AuthAuthenticated() => switch (connectionState) {
-      core.ConnectionState_Connected() => RootRoute.projectList,
-      core.ConnectionState_Reconnecting() => RootRoute.projectList,
-      _ => RootRoute.projectListOffline,
+      core.ConnectionState_Connected() => RootRoute.shell,
+      core.ConnectionState_Reconnecting() => RootRoute.shell,
+      _ => RootRoute.shellOffline,
     },
   };
 }

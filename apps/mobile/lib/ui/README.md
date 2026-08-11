@@ -29,10 +29,9 @@ Bottom tabs (single column):
 
 1. **消息** — conversation inbox (`features/messages/`), sorted by last activity
 2. **Hosts** — linked Macs from `GET /v1/hosts` (`features/hosts/`)
-3. **账户** — account + logout; secondary entry to Agent sessions
+3. **账户** — account + logout + developer log viewer
 
-Agent sessions (`features/sessions/`), social chat detail, projects, and agent
-profiles remain on secondary routes.
+Conversation detail is `/social/chat/:conversationId` (`features/social/`).
 
 ## Feature Map
 
@@ -40,15 +39,14 @@ profiles remain on secondary routes.
 |-----------|---------------------------------------|-------------------------------------|
 | auth      | `ui/features/auth/auth.dart`          | Login / register                    |
 | messages  | `ui/features/messages/messages.dart`  | Golden-path conversation inbox      |
-| sessions  | `ui/features/sessions/sessions.dart`  | Agent session list (secondary)      |
 | hosts     | `ui/features/hosts/hosts.dart`        | Linked hosts                        |
-| chat      | `ui/features/chat/chat.dart`          | Agent session chat                  |
 | account   | `ui/features/account/`                | Account tab                         |
-| projects  | `ui/features/projects/projects.dart`  | Project CRUD (secondary)            |
-| agents    | `ui/features/agents/agents.dart`      | Agent profile management            |
 | social    | `ui/features/social/social.dart`      | Collaboration IM (Slack-style rows) |
 | debug     | `ui/features/debug/debug.dart`        | Log viewer & traces                 |
 | shell     | `ui/features/shell/shell.dart`        | Root navigation shell               |
+
+Removed product surfaces (no longer shipped on Mobile): sessions list, agent
+session transcript chat, projects, agents hub.
 
 ## Shared Widgets
 
@@ -58,8 +56,8 @@ Cross-feature widgets live in `ui/core/widgets/widgets.dart`:
 import 'package:minos/ui/core/widgets/widgets.dart';
 ```
 
-Includes toast, buttons, text field, progress, approval sheet, empty state,
-page header, surface card, status dot.
+Includes toast, buttons, text field, progress, empty state, page header,
+surface card, status dot.
 
 ## Collaboration IM widgets (`features/social/`)
 
@@ -76,11 +74,13 @@ L/R messenger bubbles):
 | `widgets/conversation_system_message.dart` | Recall / system centered chrome |
 | `widgets/conversation_message_actions.dart` | Long-press sheet: reply / copy / retry / recall |
 
-Agent session transcript (`features/chat/`) remains a separate surface.
+Application orchestration for the open chat is
+`SocialChatViewModel` + `SocialChatActions` under `application/social/`.
 
 ## Layer Boundary Rules
 
 - Views (this layer) may import from `application/` providers.
 - Views must NOT import from `infrastructure/` directly.
-- Views must NOT contain business logic — delegate to providers.
+- Views must NOT contain business logic — delegate to providers / feature
+  ViewModels and Actions.
 - Shared widgets in `core/` must be stateless or self-contained.

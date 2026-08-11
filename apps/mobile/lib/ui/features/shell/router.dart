@@ -24,9 +24,9 @@ abstract final class AppRoutes {
 /// Creates the [GoRouter] instance wired to Riverpod for auth-based redirects.
 ///
 /// Redirect reads only the synchronous [authControllerProvider]. Both
-/// [RootRoute.projectList] and [RootRoute.projectListOffline] map to the
-/// same shell path, so async connection/pairing providers are not needed
-/// here (offline chrome lives inside the shell).
+/// [RootRoute.shell] and [RootRoute.shellOffline] map to the same shell path,
+/// so async connection/pairing providers are not needed here (offline chrome
+/// lives inside the shell).
 GoRouter createAppRouter(Ref ref) {
   final routerNotifier = _RouterRefreshNotifier(ref);
 
@@ -47,8 +47,8 @@ GoRouter createAppRouter(Ref ref) {
           if (currentPath != AppRoutes.splash) return AppRoutes.splash;
         case RootRoute.login:
           if (currentPath != AppRoutes.login) return AppRoutes.login;
-        case RootRoute.projectList:
-        case RootRoute.projectListOffline:
+        case RootRoute.shell:
+        case RootRoute.shellOffline:
           if (currentPath == AppRoutes.splash ||
               currentPath == AppRoutes.login) {
             return AppRoutes.shell;

@@ -115,13 +115,13 @@ lib/
 ```
 AuthBootstrapping / AuthRefreshing → splash
 AuthUnauthenticated / AuthRefreshFailed → login
-AuthAuthenticated + Connected → projectList
-AuthAuthenticated + offline → projectListOffline
+AuthAuthenticated + Connected → shell
+AuthAuthenticated + offline → shellOffline
 ```
 
 `createAppRouter` redirect only reads synchronous `authControllerProvider`.
-`projectList` and `projectListOffline` both map to shell `/` (offline chrome is
-in-shell). Do not seed login-page provider state from widget `initState` —
+`shell` and `shellOffline` both map to shell `/` (offline chrome is in-shell).
+Do not seed login-page provider state from widget `initState` —
 `LoginPageStateController.build` reads `AuthRefreshFailed` once when the
 provider is created.
 

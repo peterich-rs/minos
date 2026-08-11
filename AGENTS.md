@@ -90,7 +90,8 @@ Documentation is a maintained product surface, not a record of agent activity. K
 
 ## Verification and completion
 
-- Do not declare work complete without evidence. Compare behavior with the base branch when relevant, run the applicable quality gates, inspect meaningful logs or errors, and report the results.
+- Use the project [minos-quality-gate](.agents/skills/minos-quality-gate/SKILL.md) skill as the mandatory final phase of every code, test, schema, codegen, dependency, configuration, documentation, comment, rename, or deletion change. Before any commit, push, PR update, or handoff, classify the complete changed surface, run every selected CI-equivalent local gate, repair failures, and re-run to green. CI confirms this evidence; it must not be the first place an agent discovers formatting, lint, codegen, contract, file-size, or test failures.
+- Do not declare work complete without evidence. Compare behavior with the base branch when relevant, run the applicable quality gates, inspect meaningful logs or errors, and report the exact commands and results. Explicitly mark only path-based non-applicable gates; a missing toolchain/platform or an unrun required gate is a blocker, not a passing result.
 - Review completed work adversarially: trace the broader call chain, state, lifecycle, and failure modes for unexpected behavior. Find the root cause rather than only the reported symptom, then proactively inspect and correct analogous paths to preserve whole-codebase correctness.
 - Unit tests cover isolated business rules, state changes, parsing, validation, serialization, and error handling. Mock external systems; do not label UI, network, database, filesystem, device, or end-to-end flows as unit tests.
 - Keep integration and UI coverage separate, and run the relevant test command before handoff.
