@@ -1,6 +1,6 @@
 import 'package:minos/domain/social_message.dart';
 
-/// Timeline order for cached social messages (C3 final / decision 5).
+/// Timeline order for cached social messages.
 ///
 /// - Durable rows with [SocialChatMessage.serverOrderKey] (Hub `message_seq`):
 ///   strict ASC by seq. Never compare seq against `created_at_ms`.

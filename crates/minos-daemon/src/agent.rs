@@ -42,7 +42,7 @@ pub struct AgentSessionSnapshot {
 /// 3. Bridges `AgentManager::ingest_stream()` -> `EventWriter::write_live` so
 ///    every codex notification is persisted before being broadcast outbound.
 ///
-/// The legacy single-session `AgentRuntime` was retired; the existing daemon
+/// The single-session `AgentRuntime` was retired; the existing daemon
 /// FFI surface (`StartAgentRequest` / `SendUserMessageRequest` / `stop_agent`
 /// / `state_stream`) is preserved here as a thin shim over multi-session
 /// `AgentManager`.
@@ -51,21 +51,19 @@ pub struct AgentGlue {
     pub writer: Arc<EventWriter>,
     /// Local SQLite store. Owned so `start_agent` / `close_session` can keep
     /// the parent `sessions` / `workspaces` rows in sync with the in-memory
-    /// `AgentManager`. Without these the events FK in §8.2 fails the
+    /// `AgentManager`. Without these the events FK fails the
     /// moment codex emits its first ingest frame.
     store: Arc<LocalStore>,
     /// Watch channel mirroring the most recently observed session state. The
-    /// legacy FFI surface exposes a single `state_stream()` shaped like the
-    /// pre-Phase-C `AgentRuntime`. Multi-thread fan-out lands in C17.
+    /// FFI surface exposes a single `state_stream()`. Multi-thread fan-out is not yet wired.
     state_tx: Arc<watch::Sender<SessionState>>,
     state_rx: watch::Receiver<SessionState>,
     persisted_ingest_tx: broadcast::Sender<LocalIngestFrame>,
     local_manager_event_tx: broadcast::Sender<LocalManagerEvent>,
     local_conversation_event_tx: broadcast::Sender<LocalConversationEvent>,
     ingest_sync: Arc<StdMutex<Option<IngestSyncHandle>>>,
-    /// Default workspace dir used when `start_agent` is invoked under the
-    /// legacy surface (no workspace param). Resolved once at construction
-    /// time.
+    /// Default workspace dir used when `start_agent` is invoked without a
+    /// workspace param. Resolved once at construction time.
     default_workspace: PathBuf,
     /// Conversation completion projector (local agent-result writeback).
     completion: crate::conversation_completion::ConversationCompletion,
@@ -116,15 +114,12 @@ impl AgentGlue {
         store: Arc<LocalStore>,
         default_workspace: PathBuf,
     ) -> Self {
-        // Spawn the bridge: every durable RawIngest from the manager is forwarded to
-        // the EventWriter (which persists + broadcasts the corresponding
-        // `Envelope::Ingest` outbound).
+        // Spawn the bridge: every durable RawIngest from the manager is
+        // forwarded to the EventWriter (persist + formal host realtime uplink).
         //
         // Each ingest gets one info-level log line so the daemon log shows
-        // the codex → host event stream at a glance. Pre-fix this slot was
-        // the FK-error spam; post-fix the success path was silent and the
-        // user couldn't tell whether codex was active. Volume is bounded
-        // by codex's own emit rate (~tens/s/thread per spec §8.7).
+        // the codex → host event stream. Volume is bounded by codex's own
+        // emit rate (~tens/s/thread).
         let (persisted_ingest_tx, _) = broadcast::channel(256);
         let (local_manager_event_tx, _) = broadcast::channel(256);
         let (local_conversation_event_tx, _) = broadcast::channel(256);
@@ -561,11 +556,11 @@ impl AgentGlue {
             .map_err(map_anyhow)?;
         let cwd = outcome.cwd.display().to_string();
 
-        let hub_conversation_id = conversation_id
+        let cloud_conversation_id = conversation_id
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty());
-        if let Some(conv_id) = hub_conversation_id {
+        if let Some(conv_id) = cloud_conversation_id {
             if let Err(error) = ensure_hub_collaboration_conversation(
                 &self.store,
                 conv_id,
@@ -604,7 +599,7 @@ impl AgentGlue {
         }
 
         // Hub collab: require canonical origin (no message_key/t{ms} fallback).
-        if hub_conversation_id.is_some() {
+        if cloud_conversation_id.is_some() {
             self.completion
                 .note_require_canonical_origin(&session_id)
                 .await;
@@ -654,7 +649,7 @@ impl AgentGlue {
             profile_id = req.profile_id.as_deref().unwrap_or(""),
             agent = %agent_label(req.agent),
             session_id = %session_id,
-            conversation_id = hub_conversation_id.unwrap_or(""),
+            conversation_id = cloud_conversation_id.unwrap_or(""),
             origin_message_id = origin_message_id.as_deref().unwrap_or(""),
             delivery_id = delivery_id.as_deref().unwrap_or(""),
             bot_id = bot_id.as_deref().unwrap_or(""),
@@ -801,7 +796,7 @@ impl AgentGlue {
             self.ensure_thread_registered(existing_session_id).await?;
         }
 
-        let hub_conversation_id = conversation_id
+        let cloud_conversation_id = conversation_id
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
@@ -844,7 +839,7 @@ impl AgentGlue {
         let cwd_for_ensure = workspace_path.display().to_string();
 
         // Ensure Hub conversation exists before the turn can emit ingest events.
-        if let Some(conv_id) = hub_conversation_id.as_deref() {
+        if let Some(conv_id) = cloud_conversation_id.as_deref() {
             if let Err(error) = ensure_hub_collaboration_conversation(
                 &self.store,
                 conv_id,
@@ -866,7 +861,7 @@ impl AgentGlue {
         // When the session id is already known, pin collab/origin before the turn
         // path starts so completion never races to message_key/t{ms} fallbacks.
         if let Some(existing_session_id) = session_id.as_deref() {
-            if hub_conversation_id.is_some() {
+            if cloud_conversation_id.is_some() {
                 self.completion
                     .note_require_canonical_origin(existing_session_id)
                     .await;
@@ -909,7 +904,7 @@ impl AgentGlue {
                 .await
                 .map_err(map_anyhow)?;
             let cwd = started.cwd.display().to_string();
-            if let Some(conv_id) = hub_conversation_id.as_deref() {
+            if let Some(conv_id) = cloud_conversation_id.as_deref() {
                 self.persist_thread_parent_rows_in_conversation(
                     &started.session_id,
                     conv_id,
@@ -960,7 +955,7 @@ impl AgentGlue {
                 .await
                 .map_err(map_anyhow)?;
             let cwd = outcome.cwd.display().to_string();
-            if let Some(conv_id) = hub_conversation_id.as_deref() {
+            if let Some(conv_id) = cloud_conversation_id.as_deref() {
                 self.persist_thread_parent_rows_in_conversation(
                     &outcome.session_id,
                     conv_id,
@@ -1289,7 +1284,7 @@ impl AgentGlue {
 
         // Mirror the in-memory transition into the local DB so the next
         // daemon start sees the session as `closed` instead of flipping it
-        // to `suspended { daemon_restart }` via §8.6 startup recovery.
+        // to `suspended { daemon_restart }` via startup recovery.
         // Logged on failure but non-fatal — the manager has already
         // released the thread.
         if let Err(e) = self
@@ -7332,7 +7327,7 @@ mod tests {
         let writer = Arc::new(EventWriter::spawn(store.clone()));
         let glue = AgentGlue::wire_with(manager, writer, store.clone(), workspace.clone());
 
-        let hub_conversation_id = "hub-conv-dispatch-1";
+        let cloud_conversation_id = "hub-conv-dispatch-1";
         let origin = "origin-msg-dispatch-1";
         let response = glue
             .dispatch_message(AgentDispatchRequest {
@@ -7342,7 +7337,7 @@ mod tests {
                 workspace: workspace.display().to_string(),
                 approval_policy: None,
                 sandbox_policy: None,
-                conversation_id: Some(hub_conversation_id.into()),
+                conversation_id: Some(cloud_conversation_id.into()),
                 origin_message_id: Some(origin.into()),
                 model: None,
                 reasoning_effort: None,
@@ -7356,18 +7351,18 @@ mod tests {
             .await
             .unwrap()
             .expect("session row");
-        assert_eq!(row.conversation_id, hub_conversation_id);
+        assert_eq!(row.conversation_id, cloud_conversation_id);
         let conv = store
-            .get_conversation(hub_conversation_id)
+            .get_conversation(cloud_conversation_id)
             .await
             .unwrap()
             .expect("hub conversation must be upserted with same id");
-        assert_eq!(conv.conversation_id, hub_conversation_id);
+        assert_eq!(conv.conversation_id, cloud_conversation_id);
 
         // Must not invent Direct agent sessions for Hub-dispatched messages.
         // ensure_workspace_conversation uses workspace slug; assert no extra
         // conversation rows beyond the hub one for this session's binding.
-        assert_eq!(row.conversation_id, hub_conversation_id);
+        assert_eq!(row.conversation_id, cloud_conversation_id);
 
         fake.stop().await;
     }

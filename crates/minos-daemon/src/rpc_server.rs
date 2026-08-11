@@ -1,15 +1,8 @@
 //! `MinosRpcServer` impl that routes to inner services, plus an
-//! envelope-aware [`invoke_forwarded`] entry point.
+//! [`invoke_forwarded`] entry point for host-side local agent commands.
 //!
-//! Pre-relay this struct fronted a jsonrpsee WS server; post-Phase-F it is
-//! invoked directly from the relay-client dispatch loop when the relay
-//! delivers a peer-originated [`Envelope::Forwarded`] frame. Pairing
-//! state moved to the relay, so the corresponding fields and the active
-//! token / connection-state plumbing are gone.
-//!
-//! Holds `Arc`s only — cheap to clone once and pass into the dispatcher.
-//! Host binding (account↔host) is Host Link on the backend; this server only
-//! runs local agent / workspace commands.
+//! Host binding (account↔host) lives on the backend; this server only runs
+//! local agent / workspace commands. Holds `Arc`s only — cheap to clone.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -616,7 +609,7 @@ mod tests {
             )),
         });
 
-        let hub_conversation_id = "hub-conv-formal-1";
+        let cloud_conversation_id = "hub-conv-formal-1";
         let result = invoke_host_command(
             "agent_session.start",
             json!({
@@ -624,7 +617,7 @@ mod tests {
                 "agent_id": "agent_codex",
                 "runtime_agent": "codex",
                 "workspace": workspace.display().to_string(),
-                "conversation_id": hub_conversation_id,
+                "conversation_id": cloud_conversation_id,
                 "project_id": "proj-formal-1",
                 "conversation_title": "Hub collab thread",
             }),
@@ -643,9 +636,9 @@ mod tests {
         );
         let row = store.get_session("sess-formal-1").await.unwrap().unwrap();
         assert_eq!(row.workspace_root, value["cwd"].as_str().unwrap());
-        assert_eq!(row.conversation_id, hub_conversation_id);
+        assert_eq!(row.conversation_id, cloud_conversation_id);
         let conv = store
-            .get_conversation(hub_conversation_id)
+            .get_conversation(cloud_conversation_id)
             .await
             .unwrap()
             .expect("hub conversation must be upserted with same id");

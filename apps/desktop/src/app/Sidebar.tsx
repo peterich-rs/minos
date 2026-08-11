@@ -55,7 +55,7 @@ export function Sidebar() {
   const cloudStatus = useAccountStore((s) => s.cloudStatus);
   const accountSyncStatus = useAccountStore((s) => s.accountSyncStatus);
   const session = useAccountStore((s) => s.session);
-  const syncCloudFromHub = useAccountStore((s) => s.syncCloudFromHub);
+  const syncCloudFromCloud = useAccountStore((s) => s.syncCloudFromCloud);
   const [updateDismissed, setUpdateDismissed] = useState(false);
   const attention = projects.reduce((sum, p) => sum + p.needsAttention, 0);
 
@@ -70,8 +70,8 @@ export function Sidebar() {
   }, [source, refreshDaemonStatus]);
 
   useEffect(() => {
-    syncCloudFromHub(connection?.cloudOnline);
-  }, [connection?.cloudOnline, syncCloudFromHub]);
+    syncCloudFromCloud(connection?.cloudOnline);
+  }, [connection?.cloudOnline, syncCloudFromCloud]);
 
   // Primary Online = Account IM sync; Host is secondary (bot runtime).
   const presence = deriveHostPresence({

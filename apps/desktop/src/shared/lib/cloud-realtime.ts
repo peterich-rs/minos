@@ -21,7 +21,7 @@ import { conversationSubscriptionLruTouch } from "@/shared/lib/conversation-sub-
 import {
   createWsTicket,
   cloudClientWsUrl,
-  type HubChatMessage,
+  type CloudChatMessage,
 } from "@/shared/lib/minos-cloud";
 
 export {
@@ -57,7 +57,7 @@ type DurableMessagePayload = {
   conversation_id?: string;
   message_id?: string;
   at_ms?: number;
-  /** R3 account thin digest fields (no nested full message). */
+  /** Account thin digest fields (no nested full message). */
   preview?: string;
   sender_display_name?: string;
   mentioned?: boolean;
@@ -104,9 +104,9 @@ export type CloudInboxDigest = {
 };
 
 export type CloudRealtimeHandlers = {
-  onChatMessage: (message: HubChatMessage) => void;
+  onChatMessage: (message: CloudChatMessage) => void;
   /** Multi-end recall: remove or mark recalled in Hub timeline. */
-  onChatMessageRecalled?: (message: HubChatMessage) => void;
+  onChatMessageRecalled?: (message: CloudChatMessage) => void;
   /**
    * Account T2 thin digest — patch rail/inbox only; never full timeline body.
    */
@@ -167,7 +167,7 @@ export type CloudRealtimeHandlers = {
 
 function mapMessage(
   raw: NonNullable<DurableMessagePayload["message"]>,
-): HubChatMessage {
+): CloudChatMessage {
   const s = raw.sender;
   const isBot =
     s.kind === "bot" ||
@@ -463,7 +463,7 @@ export class CloudRealtimeSession {
   }
 
   /**
-   * C6.1: Force an immediate reconnect (sleep/wake, online, focus restore).
+   * Force an immediate reconnect (sleep/wake, online, focus restore).
    * Resets backoff, closes the current socket, and connects now.
    */
   forceReconnect(): void {
@@ -870,7 +870,7 @@ export class CloudRealtimeSession {
     const eventKind = kind ?? payload.kind;
     if (!eventKind) return false;
 
-    // R3 account thin digest → rail/inbox only (never full timeline body).
+    // Account thin digest → rail/inbox only (never full timeline body).
     if (ACCOUNT_APPEND_KINDS.has(eventKind)) {
       const digest = mapAccountDigest(payload, false);
       if (!digest) return false;

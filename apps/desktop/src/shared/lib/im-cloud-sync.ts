@@ -13,9 +13,9 @@ import { useAccountStore } from "@/store/account-store";
 import {
   addAgentToConversation,
   ensureHostRuntimeAgent,
-  respondHubApproval,
+  respondCloudApproval,
   sendAgentConversationMessage,
-  toggleHubReaction,
+  toggleCloudReaction,
   upsertConversation,
 } from "@/shared/lib/minos-cloud";
 import { isCloudImMode } from "@/shared/lib/cloud-timeline";
@@ -231,17 +231,17 @@ const RUNTIMES_FROM_ID = [
   "grok",
 ] as const;
 
-export type HubUserMessageAck = {
+export type CloudUserMessageAck = {
   messageId: string;
   messageSeq: number;
   conversationId: string;
 };
 
-const userMessageAcks = new Map<string, HubUserMessageAck>();
+const userMessageAcks = new Map<string, CloudUserMessageAck>();
 
 async function postUserMessageFromOutbox(
   entry: ImOutboxEntry,
-): Promise<HubUserMessageAck> {
+): Promise<CloudUserMessageAck> {
   const auth = cloudAuth();
   if (!auth) {
     throw new Error("Not signed in — message not synced to cloud");
@@ -351,7 +351,7 @@ async function postAgentResultFromOutbox(entry: ImOutboxEntry): Promise<void> {
   );
 }
 
-export type HubReactionToggleResult = {
+export type CloudReactionToggleResult = {
   messageId: string;
   conversationId: string;
   action: string;
@@ -369,7 +369,7 @@ export type HubReactionToggleResult = {
 
 async function postReactionToggleFromOutbox(
   entry: ImOutboxEntry,
-): Promise<HubReactionToggleResult> {
+): Promise<CloudReactionToggleResult> {
   const auth = cloudAuth();
   if (!auth) {
     throw new Error("not authenticated");
@@ -386,7 +386,7 @@ async function postReactionToggleFromOutbox(
     throw new Error("invalid_payload: reaction_toggle requires messageId+emoji");
   }
   // clientMessageId == wire client_op_id; retries reuse the same id.
-  return toggleHubReaction(
+  return toggleCloudReaction(
     auth.deviceId,
     auth.accessToken,
     entry.conversationId,
@@ -455,7 +455,7 @@ async function postApprovalResolveFromOutbox(
   delete (decision as Record<string, unknown>).client_request_id;
 
   const { session, authPhase } = useAccountStore.getState();
-  const hubRoute =
+  const cloudRoute =
     payload.route === "hub" ||
     (payload.route !== "daemon" &&
       isCloudImMode({
@@ -464,13 +464,13 @@ async function postApprovalResolveFromOutbox(
       }));
 
   try {
-    if (hubRoute) {
+    if (cloudRoute) {
       const auth = cloudAuth();
       if (!auth) {
         throw new Error("not authenticated");
       }
       // Top-level client_request_id = outbox logical op id (Intent Outbox).
-      await respondHubApproval(auth.deviceId, auth.accessToken, {
+      await respondCloudApproval(auth.deviceId, auth.accessToken, {
         requestId,
         decision,
         clientRequestId: entry.clientMessageId,
@@ -488,7 +488,7 @@ async function postApprovalResolveFromOutbox(
 
 async function postOutboxEntry(
   entry: ImOutboxEntry,
-): Promise<HubReactionToggleResult | HubUserMessageAck | void> {
+): Promise<CloudReactionToggleResult | CloudUserMessageAck | void> {
   switch (entry.kind) {
     case "user_message":
       return postUserMessageFromOutbox(entry);
@@ -517,7 +517,7 @@ export async function syncReactionToggleToCloud(input: {
   messageId: string;
   emoji: string;
   clientOpId: string;
-}): Promise<HubReactionToggleResult | null> {
+}): Promise<CloudReactionToggleResult | null> {
   const conversationId = input.conversationId.trim();
   const messageId = input.messageId.trim();
   const emoji = input.emoji.trim();
@@ -629,7 +629,7 @@ export async function syncUserMessageToCloud(input: {
   messageSource?: "client_live" | "host_projection" | "system";
   /** Structured AppendMessage mentions (bot/account). */
   mentions?: ImOutboxEntry["mentions"];
-}): Promise<HubUserMessageAck | null> {
+}): Promise<CloudUserMessageAck | null> {
   const auth = cloudAuth();
   if (!auth) return null;
   const text = input.text.trim();
@@ -676,11 +676,11 @@ async function flushOutboxEntry(
     if (entry.kind === "reaction_toggle" && result) {
       reactionResults.set(
         entry.clientMessageId,
-        result as HubReactionToggleResult,
+        result as CloudReactionToggleResult,
       );
     }
     if (entry.kind === "user_message" && result && "messageSeq" in result) {
-      userMessageAcks.set(entry.clientMessageId, result as HubUserMessageAck);
+      userMessageAcks.set(entry.clientMessageId, result as CloudUserMessageAck);
     }
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
@@ -812,7 +812,7 @@ export async function syncAgentResultToCloud(input: {
   const messageId = input.messageId.trim();
   const conversationId = input.conversationId.trim();
   if (!text || !messageId || !conversationId) return;
-  // Uplink gate (C2): only canonical agent-result:{conv}:{session}:{origin}.
+  // Uplink gate: only canonical agent-result:{conv}:{session}:{origin}.
   if (!isCanonicalAgentResultId(messageId, conversationId)) {
     return;
   }
@@ -857,22 +857,22 @@ export async function syncAgentResultToCloud(input: {
  * missing (Desktop-native turns). Canonical id only — skip when Hub already
  * has the same message id (or outbox acked).
  */
-export async function projectMissingLocalAgentResultsToHub(
+export async function projectMissingLocalAgentResultsToCloud(
   conversationId: string,
   localMessages: TimelineMessage[],
-  hubMessages: TimelineMessage[],
+  cloudMessages: TimelineMessage[],
 ): Promise<void> {
   if (!cloudAuth() || !conversationId.trim()) return;
 
-  const hubIds = new Set(hubMessages.map((m) => m.id));
+  const cloudIds = new Set(cloudMessages.map((m) => m.id));
 
   for (const m of localMessages) {
     if (!isProjectableAgentMessage(m)) continue;
     // Only uplink frozen formula ids.
     if (!isCanonicalAgentResultId(m.id, conversationId)) continue;
     if ((await isAcked(m.id)) || projectedMessageIds.has(m.id)) continue;
-    // Same canonical id already on Hub — no soft session/body dedupe (C2).
-    if (hubIds.has(m.id)) {
+    // Same canonical id already on Hub — no soft session/body dedupe.
+    if (cloudIds.has(m.id)) {
       rememberProjected(m.id);
       continue;
     }

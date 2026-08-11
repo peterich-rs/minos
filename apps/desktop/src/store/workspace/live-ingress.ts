@@ -85,7 +85,7 @@ async function runConversationTurnEndRefresh(
   try {
     const { useAccountStore } = await import("@/store/account-store");
     const { isCloudImMode } = await import("@/shared/lib/cloud-timeline");
-    const { projectMissingLocalAgentResultsToHub, flushImOutbox } =
+    const { projectMissingLocalAgentResultsToCloud, flushImOutbox } =
       await import("@/shared/lib/im-cloud-sync");
     const { toUiMessage } = await import("./helpers");
     const { daemonApi } = await import("@/shared/lib/daemon");
@@ -102,7 +102,7 @@ async function runConversationTurnEndRefresh(
       limit: 50,
     });
     const localUi = (page.messages ?? []).map((m) => toUiMessage(m));
-    await projectMissingLocalAgentResultsToHub(conversationId, localUi, []);
+    await projectMissingLocalAgentResultsToCloud(conversationId, localUi, []);
     void flushImOutbox();
     // Open window may still be on local-only agent-result; quiet re-merge after
     // uplink so Hub body/reactions can replace same-id rows without a leave.

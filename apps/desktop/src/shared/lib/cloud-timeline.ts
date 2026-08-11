@@ -11,7 +11,7 @@
  */
 
 import type { AgentRuntime, TimelineMessage } from "./mock-data.ts";
-import type { HubChatMessage } from "./minos-cloud.ts";
+import type { CloudChatMessage } from "./minos-cloud.ts";
 import { formatLocalClock } from "./time.ts";
 import { normalizeHostRuntime } from "./im-cloud-sync-helpers.ts";
 import {
@@ -39,7 +39,7 @@ export function isCloudImMode(input: {
 }
 
 /** Infer runtime bin from hub agent display / id map (fallback only). */
-export function runtimeFromCloudAgent(message: HubChatMessage): AgentRuntime | undefined {
+export function runtimeFromCloudAgent(message: CloudChatMessage): AgentRuntime | undefined {
   if (message.senderType !== "agent") return undefined;
   // Prefer wire MessageSender.runtime_agent (badge field, not identity).
   if (message.runtimeAgent) {
@@ -56,7 +56,7 @@ export function runtimeFromCloudAgent(message: HubChatMessage): AgentRuntime | u
 }
 
 export function cloudChatMessageToTimeline(
-  message: HubChatMessage,
+  message: CloudChatMessage,
   opts?: { agentRuntimeMap?: Map<string, string> },
 ): TimelineMessage | null {
   if (!message.messageId) return null;
@@ -197,12 +197,12 @@ function isOptimisticLocalBubble(m: TimelineMessage): boolean {
  */
 function anchorForHostCard(
   card: TimelineMessage,
-  hubBubbles: TimelineMessage[],
+  cloudBubbles: TimelineMessage[],
 ): number | undefined {
   let best: number | undefined;
   let bestTs = -Infinity;
   const cardTs = card.createdAtMs ?? Number.POSITIVE_INFINITY;
-  for (const h of hubBubbles) {
+  for (const h of cloudBubbles) {
     if (h.messageSeq == null || !Number.isFinite(h.messageSeq)) continue;
     const ts = h.createdAtMs ?? 0;
     if (ts <= cardTs && ts >= bestTs) {
@@ -219,16 +219,16 @@ function anchorForHostCard(
  * Rules (final):
  * - Hub wins on **same message id** for chat content (multi-end SSOT).
  * - Hub `message_seq` is the **only** social total-order key for chat bubbles.
- * - Host tool/git/system/approval cards use `anchorHubMessageSeq` + `suborder`
+ * - Host tool/git/system/approval cards use `anchorCloudMessageSeq` + `suborder`
  *   (never inject host daemon seq into social `messageSeq`).
  * - Local chat missing from Hub: optimistic / user / agent-result gap-fill only.
  */
 export function mergeCloudAndLocalTimeline(input: {
-  hubMessages: TimelineMessage[];
+  cloudMessages: TimelineMessage[];
   localMessages: TimelineMessage[];
 }): TimelineMessage[] {
   const byId = new Map<string, TimelineMessage>();
-  const hubBubbles = input.hubMessages.filter(
+  const cloudBubbles = input.cloudMessages.filter(
     (m) => m.messageSeq != null && Number.isFinite(m.messageSeq),
   );
 
@@ -246,19 +246,19 @@ export function mergeCloudAndLocalTimeline(input: {
         ? m.messageSeq
         : undefined);
     const anchor =
-      m.anchorHubMessageSeq ?? anchorForHostCard(m, hubBubbles);
+      m.anchorCloudMessageSeq ?? anchorForHostCard(m, cloudBubbles);
     byId.set(m.id, {
       ...m,
       // Host cards never participate in Hub social messageSeq order.
       messageSeq: undefined,
       hostMessageSeq: hostSeq,
-      anchorHubMessageSeq: anchor,
+      anchorCloudMessageSeq: anchor,
       suborder: m.suborder ?? hostSeq ?? 0,
     });
   }
 
   // Hub bubbles: content + Hub message_seq are authoritative.
-  for (const m of input.hubMessages) {
+  for (const m of input.cloudMessages) {
     const localPeer = input.localMessages.find((l) => l.id === m.id);
     const reactions =
       m.reactions !== undefined ? m.reactions : localPeer?.reactions;
@@ -276,7 +276,7 @@ export function mergeCloudAndLocalTimeline(input: {
       createdAtMs,
       reactions,
       // Chat bubbles are not host cards.
-      anchorHubMessageSeq: undefined,
+      anchorCloudMessageSeq: undefined,
       hostMessageSeq: undefined,
       suborder: undefined,
     });
@@ -301,8 +301,8 @@ export function mergeCloudAndLocalTimeline(input: {
     if (keep) {
       // Pending uplink / optimistic: do not treat host daemon seq as Hub social
       // order when any Hub seq exists in the window.
-      const hubSpaceActive = hubBubbles.length > 0;
-      if (hubSpaceActive && !isOptimisticLocalBubble(m)) {
+      const cloudSpaceActive = cloudBubbles.length > 0;
+      if (cloudSpaceActive && !isOptimisticLocalBubble(m)) {
         byId.set(m.id, {
           ...m,
           hostMessageSeq: m.messageSeq,
@@ -320,22 +320,22 @@ export function mergeCloudAndLocalTimeline(input: {
 /** Apply one hub realtime message into an existing timeline window. */
 export function upsertCloudMessageIntoTimeline(
   prev: TimelineMessage[] | undefined,
-  hub: TimelineMessage,
+  cloud: TimelineMessage,
 ): TimelineMessage[] {
   const list = prev ?? [];
   const byId = new Map(list.map((m) => [m.id, m]));
-  const existing = byId.get(hub.id);
+  const existing = byId.get(cloud.id);
   if (
     existing &&
-    existing.body === hub.body &&
-    existing.createdAtMs === hub.createdAtMs &&
-    existing.role === hub.role &&
-    existing.replyToMessageId === hub.replyToMessageId
+    existing.body === cloud.body &&
+    existing.createdAtMs === cloud.createdAtMs &&
+    existing.role === cloud.role &&
+    existing.replyToMessageId === cloud.replyToMessageId
   ) {
     return list;
   }
 
   // Same-id supersede only (canonical agent-result ids — no session soft drop).
-  byId.set(hub.id, hub);
+  byId.set(cloud.id, cloud);
   return sortTimelineMessages([...byId.values()]);
 }

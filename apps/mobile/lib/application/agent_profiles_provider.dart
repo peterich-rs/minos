@@ -15,7 +15,7 @@ import 'package:minos/src/rust/api/minos.dart';
 /// Hub register/update when authenticated.
 ///
 /// Bulk-import of offline drafts is **not** started from [build] — see
-/// [hubBotImportBootstrapProvider] (auth lifecycle, app root).
+/// [cloudBotImportBootstrapProvider] (auth lifecycle, app root).
 final agentProfilesControllerProvider =
     AsyncNotifierProvider<AgentProfilesController, AgentWorkspaceState>(
       AgentProfilesController.new,
@@ -47,7 +47,7 @@ final threadBoundAgentProfileProvider = Provider.family<AgentProfile?, String>((
 /// - Does not run on every provider rebuild.
 /// - Resets after logout so a later login can import again.
 /// - Concurrent calls coalesce via the controller's in-flight future.
-final hubBotImportBootstrapProvider = Provider<void>((ref) {
+final cloudBotImportBootstrapProvider = Provider<void>((ref) {
   ref.listen<AuthState>(authControllerProvider, (previous, next) {
     if (next is AuthUnauthenticated) {
       // Next login may need import for a different account's drafts.
@@ -88,7 +88,7 @@ class AgentProfilesController extends AsyncNotifier<AgentWorkspaceState> {
   /// Idempotent by bot name: register missing local drafts on Hub and rewrite
   /// local cache `agentId` to the Hub `agent_id`. Safe to call repeatedly.
   ///
-  /// Call from auth lifecycle ([hubBotImportBootstrapProvider]), not from
+  /// Call from auth lifecycle ([cloudBotImportBootstrapProvider]), not from
   /// [build]. Concurrent callers share one in-flight future.
   Future<int> importLocalProfilesToHub() {
     final existing = _importInFlight;

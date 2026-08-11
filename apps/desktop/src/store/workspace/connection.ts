@@ -189,7 +189,7 @@ export function createConnectionActions(
           set({ livePush: false });
         }
 
-        // §6.5: quietly hydrate ConversationList for all known projects so badge
+        // quietly hydrate ConversationList for all known projects so badge
         // aggregates (unread + approvalCount from DTO) cover the project index.
         void quietHydrateAllConversationLists(get);
 

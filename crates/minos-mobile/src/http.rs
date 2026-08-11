@@ -2512,7 +2512,7 @@ async fn decode_error(resp: Response<ResponseBody>) -> MinosError {
 }
 
 /// Decode an `AuthResponse` from the backend, mapping `kind` strings on
-/// the failure path to typed `MinosError` variants. Spec §5.4, §8.1.
+/// the failure path to typed `MinosError` variants.
 async fn decode_auth_response(
     resp: Response<ResponseBody>,
     trace_id: u64,
@@ -2560,7 +2560,7 @@ async fn decode_refresh_response(
 
 /// Map an HTTP error response that carries either the old `{ "kind": "..." }`
 /// body or the current `{ "error": { "code": "..." } }` envelope to a typed
-/// `MinosError`. Used by every `/v1/auth/*` endpoint. Spec §8.1.
+/// `MinosError`. Used by every `/v1/auth/*` endpoint.
 async fn decode_kind_error(resp: Response<ResponseBody>) -> MinosError {
     let (parts, body) = resp.into_parts();
     let retry_after = parts

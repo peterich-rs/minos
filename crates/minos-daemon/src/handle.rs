@@ -1,5 +1,5 @@
 //! Public façade for the host daemon (CLI / Desktop / local RPC), rewired for the relay-client
-//! migration (plan 05 Phase F).
+//! migration.
 //!
 //! `DaemonInner` owns the outbound [`RelayClient`] plus its two watch
 //! receivers (relay link + peer) and the current in-memory trusted peer.
@@ -30,9 +30,9 @@ struct DaemonInner {
     link_rx: watch::Receiver<minos_domain::RelayLinkState>,
     peer_rx: watch::Receiver<minos_domain::PeerState>,
     /// In-memory mirror of the trusted peer. Shared `Arc` with the
-    /// relay-client dispatch task, which updates it on every
-    /// `EventKind::Paired` / `Unpaired` so warm reads via
-    /// `current_trusted_device` always see the newest record.
+    /// relay-client dispatch task, which updates it on host-link state
+    /// changes so warm reads via `current_trusted_device` always see the
+    /// newest record.
     peer: Arc<StdMutex<Option<PeerRecord>>>,
     /// Full host-side mobile/account snapshot from `GET /v1/me/peers`.
     peers: Arc<StdMutex<Vec<HostPeerSummary>>>,
@@ -43,7 +43,7 @@ struct DaemonInner {
     mac_name: String,
     /// Populated by the relay-client task on fatal exit paths (pre-upgrade
     /// HTTP 401 → `Unauthorized`; post-upgrade WS close 4401 →
-    /// `DeviceNotTrusted`; close 4400 → `EnvelopeVersionUnsupported`).
+    /// `DeviceNotTrusted`; close 4400 → protocol/validation failure).
     /// Drained on read so the UI sees each failure at most once per
     /// occurrence.
     last_error: Arc<StdMutex<Option<MinosError>>>,

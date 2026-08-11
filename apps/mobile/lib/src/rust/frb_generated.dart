@@ -10345,7 +10345,7 @@ class MobileClientImpl extends RustOpaque implements MobileClient {
 
   /// Submit a user approval decision for a pending host request.
   ///
-  /// `client_request_id` is the Hub Intent Outbox id (C5.3). When omitted,
+  /// `client_request_id` is the Hub Intent Outbox id. When omitted,
   /// the mobile client generates one so the wire body never hardcodes null.
   Future<void> sendApprovalDecision({
     required String requestId,
@@ -10432,7 +10432,7 @@ class MobileClientImpl extends RustOpaque implements MobileClient {
   Stream<UiEventFrame> subscribeUiEvents() => RustLib.instance.api
       .crateApiMinosMobileClientSubscribeUiEvents(that: this);
 
-  /// Toggle Hub reaction; `client_op_id` is the Intent Outbox id (B6/C5).
+  /// Toggle Hub reaction; `client_op_id` is the Intent Outbox id.
   Future<ToggleReactionResponse> toggleReaction({
     required String conversationId,
     required String messageId,

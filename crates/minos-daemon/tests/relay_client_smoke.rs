@@ -3,9 +3,8 @@
 //! Each test boots a real in-process backend (axum + sqlx over a temp-file
 //! SQLite DB, copied from `crates/minos-backend/tests/e2e.rs`'s harness) on
 //! `127.0.0.1:0`, spawns a `RelayClient` targeting it, and drives the
-//! flow end-to-end. The assertions freeze the contract Phase F will wire
-//! into `DaemonHandle`:
-//!
+//! flow end-to-end. The assertions freeze the contract that `DaemonHandle`
+//! relies on:
 //! 1. `connect_becomes_connected` — link transitions
 //!    `Connecting{0}` → `Connected` within a bounded window.
 //! 2. `apply_link_token_persists_and_connects` — Host Link token apply
@@ -23,7 +22,7 @@ use std::time::Duration;
 use minos_backend::{
     host_link::HostLinkService,
     http::{router, BackendState},
-    session::SessionRegistry,
+    realtime::RealtimeConnectionRegistry,
     store,
 };
 use minos_daemon::config::RelayConfig;
@@ -103,7 +102,7 @@ async fn spawn_relay() -> anyhow::Result<Relay> {
     let addr = listener.local_addr()?;
 
     let mut state = BackendState::new(
-        Arc::new(SessionRegistry::new()),
+        Arc::new(RealtimeConnectionRegistry::new()),
         Arc::new(HostLinkService::new(pool.clone())),
         pool.clone(),
         TOKEN_TTL,

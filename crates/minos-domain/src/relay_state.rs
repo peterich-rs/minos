@@ -1,5 +1,5 @@
 //! Relay client-side state axes. Two independent enums — link (to relay)
-//! and peer (to paired iPhone). See spec §4.3.
+//! and peer (to paired iPhone).
 
 use serde::{Deserialize, Serialize};
 

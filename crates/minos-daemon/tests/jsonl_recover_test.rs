@@ -1,4 +1,4 @@
-//! Phase D Task D4: integration coverage for `jsonl_recover`.
+//! Integration coverage for `jsonl_recover`.
 //!
 //! Production reads from `$HOME/.codex/sessions/`; tests pass
 //! `recover_with_root` a temp dir as the codex home so the developer's

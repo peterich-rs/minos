@@ -177,13 +177,13 @@ export const useReactionStore = create<ReactionState>((set, get) => ({
     const optimistic = toggleReactionGroup(prev, emoji);
 
     const { session, authPhase } = useAccountStore.getState();
-    const hubMode = isCloudImMode({
+    const cloudMode = isCloudImMode({
       authPhase,
       accessToken: session?.accessToken,
     });
     // Hub message ids are typically UUIDs from cloud; prefer Hub when auth + cid.
-    const useHub =
-      hubMode &&
+    const useCloud =
+      cloudMode &&
       Boolean(session?.accessToken) &&
       Boolean(conversationId?.trim());
 
@@ -195,7 +195,7 @@ export const useReactionStore = create<ReactionState>((set, get) => ({
         [messageId]: requestGen,
       };
       const inFlightCountByMessageId = { ...s.inFlightCountByMessageId };
-      if (useHub || (s.durableMode && isTauriRuntime())) {
+      if (useCloud || (s.durableMode && isTauriRuntime())) {
         inFlightCountByMessageId[messageId] =
           (inFlightCountByMessageId[messageId] ?? 0) + 1;
       }
@@ -210,13 +210,13 @@ export const useReactionStore = create<ReactionState>((set, get) => ({
       };
     });
 
-    if (!useHub && (!get().durableMode || !isTauriRuntime())) {
+    if (!useCloud && (!get().durableMode || !isTauriRuntime())) {
       return;
     }
 
     void (async () => {
       try {
-        if (useHub && conversationId && session?.accessToken) {
+        if (useCloud && conversationId && session?.accessToken) {
           // Single path: enqueue → flush via outbox (same machine as
           // user_message). No parallel inline POST.
           const clientOpId = newReactionClientOpId();

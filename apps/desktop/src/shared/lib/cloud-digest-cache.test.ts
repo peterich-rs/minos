@@ -62,13 +62,13 @@ describe("cloudDigestCache", () => {
   });
 });
 
-describe("resolveRailUnread (P1 single-track)", () => {
+describe("resolveRailUnread (single-track)", () => {
   it("hub mode uses digest only and ignores local baseline", () => {
     assert.equal(
       resolveRailUnread({
         conversationId: "c1",
         unreadSource: "hub",
-        hubUnreadCount: 3,
+        cloudUnreadCount: 3,
         localUnread: 99,
       }),
       3,
@@ -77,7 +77,7 @@ describe("resolveRailUnread (P1 single-track)", () => {
       resolveRailUnread({
         conversationId: "c1",
         unreadSource: "hub",
-        hubUnreadCount: 0,
+        cloudUnreadCount: 0,
         localUnread: 99,
       }),
       undefined,
@@ -86,7 +86,7 @@ describe("resolveRailUnread (P1 single-track)", () => {
       resolveRailUnread({
         conversationId: "c1",
         unreadSource: "hub",
-        hubUnreadCount: undefined,
+        cloudUnreadCount: undefined,
         localUnread: 5,
       }),
       undefined,
@@ -98,7 +98,7 @@ describe("resolveRailUnread (P1 single-track)", () => {
       resolveRailUnread({
         conversationId: "c1",
         unreadSource: "local",
-        hubUnreadCount: 7,
+        cloudUnreadCount: 7,
         localUnread: 2,
       }),
       2,
@@ -111,7 +111,7 @@ describe("resolveRailUnread (P1 single-track)", () => {
         conversationId: "c1",
         focusedConversationId: "c1",
         unreadSource: "hub",
-        hubUnreadCount: 4,
+        cloudUnreadCount: 4,
       }),
       undefined,
     );
@@ -129,7 +129,7 @@ describe("resolveLastActivityMs / resolveListPreview", () => {
   it("uses daemon preview when local activity is newer", () => {
     assert.equal(
       resolveListPreview({
-        hub: {
+        cloud: {
           conversationId: "c1",
           title: "Hub",
           preview: "hub preview",
@@ -140,7 +140,7 @@ describe("resolveLastActivityMs / resolveListPreview", () => {
           memberCount: 1,
         },
         daemonPreview: "local preview",
-        hubLastMessageAtMs: 50,
+        cloudLastMessageAtMs: 50,
         daemonUpdatedAtMs: 200,
       }),
       "local preview",
@@ -150,7 +150,7 @@ describe("resolveLastActivityMs / resolveListPreview", () => {
   it("uses hub preview when hub is newer or tied", () => {
     assert.equal(
       resolveListPreview({
-        hub: {
+        cloud: {
           conversationId: "c1",
           title: "Hub",
           preview: "hub preview",
@@ -161,7 +161,7 @@ describe("resolveLastActivityMs / resolveListPreview", () => {
           memberCount: 1,
         },
         daemonPreview: "local preview",
-        hubLastMessageAtMs: 200,
+        cloudLastMessageAtMs: 200,
         daemonUpdatedAtMs: 100,
       }),
       "hub preview",
@@ -191,7 +191,7 @@ describe("mergeConversationList", () => {
           unread: 9, // local baseline must not win in hub mode
         },
       ],
-      hubDigests: [
+      cloudDigests: [
         {
           conversationId: "c1",
           title: "Hub title",
@@ -226,7 +226,7 @@ describe("mergeConversationList", () => {
           updatedAtMs: 50,
         },
       ],
-      hubDigests: [
+      cloudDigests: [
         {
           conversationId: "c1",
           title: "Conversation",
@@ -253,7 +253,7 @@ describe("mergeConversationList", () => {
           title: "Local named chat",
         },
       ],
-      hubDigests: [
+      cloudDigests: [
         {
           conversationId: "c1",
           title: "",
@@ -282,7 +282,7 @@ describe("mergeConversationList", () => {
           updatedAtMs: 5000,
         },
       ],
-      hubDigests: [
+      cloudDigests: [
         {
           conversationId: "c1",
           title: "Hub title",
@@ -313,7 +313,7 @@ describe("mergeConversationList", () => {
           messageCount: 10,
         },
       ],
-      hubDigests: [],
+      cloudDigests: [],
     });
     assert.equal(merged.length, 1);
     assert.equal(merged[0].unread, undefined);
@@ -331,7 +331,7 @@ describe("mergeConversationList", () => {
           unread: 4,
         },
       ],
-      hubDigests: [],
+      cloudDigests: [],
     });
     assert.equal(merged[0].unread, 4);
   });
@@ -341,7 +341,7 @@ describe("mergeConversationList", () => {
       projectId: "p1",
       unreadSource: "hub",
       daemonRows: [],
-      hubDigests: [
+      cloudDigests: [
         {
           conversationId: "hub-only",
           title: "Mobile chat",
@@ -353,7 +353,7 @@ describe("mergeConversationList", () => {
           memberCount: 1,
         },
       ],
-      includeHubOnly: true,
+      includeCloudOnly: true,
     });
     assert.equal(merged.length, 1);
     assert.equal(merged[0].id, "hub-only");

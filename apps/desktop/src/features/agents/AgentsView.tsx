@@ -66,7 +66,7 @@ type BotRow = {
   systemPrompt: string;
   status: string;
   source: "hub" | "daemon";
-  hubSource?: string;
+  cloudSource?: string;
   avatarUrl?: string | null;
 };
 
@@ -95,7 +95,7 @@ function cloudAgentToRow(a: CloudAgentSummary): BotRow {
     systemPrompt: a.systemPrompt,
     status: a.status || "active",
     source: "hub",
-    hubSource: a.source,
+    cloudSource: a.source,
     avatarUrl: a.avatarUrl,
   };
 }
@@ -138,10 +138,10 @@ export function AgentsView() {
   const bots = useMemo((): BotRow[] => {
     if (cloudOnline && cloudAgentsQuery.isSuccess) {
       // Prefer user-configured bots in the product directory; host_runtime is seed-only.
-      const hub = (cloudAgentsQuery.data ?? [])
+      const cloud = (cloudAgentsQuery.data ?? [])
         .filter((a) => (a.source || "user") !== "host_runtime")
         .map(cloudAgentToRow);
-      return hub;
+      return cloud;
     }
     // Offline / not signed in: fall back to daemon cache.
     return daemonProfiles.map(daemonProfileToRow);
@@ -179,14 +179,14 @@ export function AgentsView() {
     if (importOnceRef.current) return;
     if (!profilesQuery.isSuccess || !cloudAgentsQuery.isSuccess) return;
     importOnceRef.current = true;
-    const hubNames = new Set(
+    const cloudNames = new Set(
       (cloudAgentsQuery.data ?? []).map((a) =>
         (a.name || a.displayName || "").trim().toLowerCase(),
       ),
     );
     const missing = daemonProfiles.filter((p) => {
       const n = (p.name || "").trim().toLowerCase();
-      return n.length > 0 && !hubNames.has(n);
+      return n.length > 0 && !cloudNames.has(n);
     });
     if (missing.length === 0) return;
     void (async () => {

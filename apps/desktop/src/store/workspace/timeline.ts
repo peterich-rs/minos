@@ -28,16 +28,16 @@ import {
 import { useReactionStore } from "@/features/chat/reaction-store";
 import {
   flushImOutbox,
-  projectMissingLocalAgentResultsToHub,
+  projectMissingLocalAgentResultsToCloud,
 } from "@/shared/lib/im-cloud-sync";
-import { pullHubConversationMessagePage } from "@/shared/lib/im-cloud-inbound";
+import { pullCloudConversationMessagePage } from "@/shared/lib/im-cloud-inbound";
 import {
   isCloudImMode,
   mergeCloudAndLocalTimeline,
 } from "@/shared/lib/cloud-timeline";
 import { useAccountStore } from "@/store/account-store";
 
-function hubImEnabled(): boolean {
+function cloudImEnabled(): boolean {
   const { session, authPhase } = useAccountStore.getState();
   return isCloudImMode({
     authPhase,
@@ -95,7 +95,7 @@ export function createTimelineActions(
         });
 
         try {
-          const linked = hubImEnabled();
+          const linked = cloudImEnabled();
 
           // Subscribe only — loadTimeline is the sole cold-hydrate writer.
           // (focusConversationOnCloud must not dual-merge the window.)
@@ -114,8 +114,8 @@ export function createTimelineActions(
           });
           if (isStale()) return;
 
-          let hubPage: Awaited<
-            ReturnType<typeof pullHubConversationMessagePage>
+          let cloudPage: Awaited<
+            ReturnType<typeof pullCloudConversationMessagePage>
           > = {
             messages: [],
             nextBeforeSeq: null,
@@ -123,24 +123,24 @@ export function createTimelineActions(
           };
           if (linked) {
             try {
-              hubPage = await pullHubConversationMessagePage(conversationId, {
+              cloudPage = await pullCloudConversationMessagePage(conversationId, {
                 limit: MESSAGE_PAGE_SIZE,
               });
-            } catch (hubErr) {
+            } catch (cloudErr) {
               console.warn(
                 "[timeline] hub message pull failed; applying local only",
-                hubErr,
+                cloudErr,
               );
             }
           }
           if (isStale()) return;
-          const hubRows = hubPage.messages;
+          const cloudRows = cloudPage.messages;
 
           const localUi = messagePage.messages.map(toUiMessage);
           // Hub IM: cold-hydrate reactions from mapped Hub rows (id + reactions).
           // Local workbench: daemon list_messages reactions.
-          if (linked && hubRows.length > 0) {
-            useReactionStore.getState().hydrateFromMessages(hubRows);
+          if (linked && cloudRows.length > 0) {
+            useReactionStore.getState().hydrateFromMessages(cloudRows);
           } else {
             useReactionStore
               .getState()
@@ -155,7 +155,7 @@ export function createTimelineActions(
               // host agent-result appears before / without Hub uplink.
               // prev window keeps optimistic sending/failed + local tool cards.
               merged = mergeCloudAndLocalTimeline({
-                hubMessages: hubRows,
+                cloudMessages: cloudRows,
                 localMessages: [...localUi, ...(prevMessages ?? [])],
               });
             } else {
@@ -167,10 +167,10 @@ export function createTimelineActions(
             const prevHist =
               s.messageHistoryByConversation[conversationId] ??
               EMPTY_MESSAGE_HISTORY;
-            const hubHasOlder =
+            const cloudHasOlder =
               linked &&
-              (hubPage.nextBeforeSeq != null ||
-                hubPage.rawCount >= MESSAGE_PAGE_SIZE);
+              (cloudPage.nextBeforeSeq != null ||
+                cloudPage.rawCount >= MESSAGE_PAGE_SIZE);
             const hostHasOlder = messagePage.hasMore;
             const firstCreated = firstMessageCreatedAtMs(merged);
             const nextHist: MessageHistoryMeta = quiet
@@ -178,18 +178,18 @@ export function createTimelineActions(
                   prev: prevHist,
                   firstLoadedCreatedAtMs:
                     firstCreated ?? prevHist.firstLoadedCreatedAtMs,
-                  hasOlderHub:
-                    prevHist.hasOlderHub || hubHasOlder || trimmed.trimmed,
+                  hasOlderCloud:
+                    prevHist.hasOlderCloud || cloudHasOlder || trimmed.trimmed,
                   hasOlderHost:
                     prevHist.hasOlderHost || hostHasOlder || trimmed.trimmed,
                   loadingOlder: false,
                 })
               : metaAfterMessageTail(
                   merged,
-                  hostHasOlder || hubHasOlder || trimmed.trimmed,
+                  hostHasOlder || cloudHasOlder || trimmed.trimmed,
                   firstCreated,
                   {
-                    hasMoreHub: hubHasOlder || trimmed.trimmed,
+                    hasMoreCloud: cloudHasOlder || trimmed.trimmed,
                     hasMoreHost: hostHasOlder || trimmed.trimmed,
                   },
                 );
@@ -218,10 +218,10 @@ export function createTimelineActions(
           // turns (Hub projector only arms client_live Mobile dispatches).
           void flushImOutbox();
           if (linked) {
-            void projectMissingLocalAgentResultsToHub(
+            void projectMissingLocalAgentResultsToCloud(
               conversationId,
               localUi,
-              hubRows,
+              cloudRows,
             ).then(async () => {
               if (isStale()) return;
               const hasLocalAgent = localUi.some(
@@ -231,7 +231,7 @@ export function createTimelineActions(
               if (!hasLocalAgent) return;
               // Quiet re-pull so Hub echo replaces local-only agent-result
               // (same-id merge) after successful uplink.
-              const page = await pullHubConversationMessagePage(
+              const page = await pullCloudConversationMessagePage(
                 conversationId,
                 { limit: MESSAGE_PAGE_SIZE },
               );
@@ -239,7 +239,7 @@ export function createTimelineActions(
               set((s) => {
                 const prev = s.messagesByConversation[conversationId] ?? [];
                 const merged = mergeCloudAndLocalTimeline({
-                  hubMessages: page.messages,
+                  cloudMessages: page.messages,
                   localMessages: [...localUi, ...prev],
                 });
                 const trimmed = trimMessagesHardMax(merged);
@@ -293,16 +293,16 @@ export function createTimelineActions(
       EMPTY_MESSAGE_HISTORY;
     if (hist.loadingOlder || !hist.hasOlder) return;
 
-    const linked = hubImEnabled();
+    const linked = cloudImEnabled();
     // Independent namespaces: never feed host min into Hub before_seq.
-    const hubBefore =
-      hist.hubMinLoadedSeq ?? (linked ? hist.firstLoadedSeq : null);
+    const cloudBefore =
+      hist.cloudMinLoadedSeq ?? (linked ? hist.firstLoadedSeq : null);
     const hostBefore =
       hist.hostMinLoadedSeq ?? (!linked ? hist.firstLoadedSeq : null);
 
-    const canPageHub = linked && hubBefore != null && hubBefore > 1;
+    const canPageCloud = linked && cloudBefore != null && cloudBefore > 1;
     const canPageHost = hostBefore != null && hostBefore > 1;
-    if (!canPageHub && !canPageHost) {
+    if (!canPageCloud && !canPageHost) {
       set((s) => ({
         messageHistoryByConversation: {
           ...s.messageHistoryByConversation,
@@ -310,7 +310,7 @@ export function createTimelineActions(
             s.messagesByConversation[conversationId] ?? [],
             {
               prev: hist,
-              hasOlderHub: false,
+              hasOlderCloud: false,
               hasOlderHost: false,
               loadingOlder: false,
             },
@@ -338,29 +338,29 @@ export function createTimelineActions(
           })
         : Promise.resolve({ messages: [], hasMore: false });
 
-      const hubPagePromise = canPageHub
-        ? pullHubConversationMessagePage(conversationId, {
-            beforeSeq: hubBefore!,
+      const cloudPagePromise = canPageCloud
+        ? pullCloudConversationMessagePage(conversationId, {
+            beforeSeq: cloudBefore!,
             limit: MESSAGE_PAGE_SIZE,
           })
         : Promise.resolve({
             messages: [] as Awaited<
-              ReturnType<typeof pullHubConversationMessagePage>
+              ReturnType<typeof pullCloudConversationMessagePage>
             >["messages"],
             nextBeforeSeq: null as number | null,
             rawCount: 0,
           });
 
-      const [page, hubPage] = await Promise.all([
+      const [page, cloudPage] = await Promise.all([
         daemonPagePromise,
-        hubPagePromise,
+        cloudPagePromise,
       ]);
       if (get().source !== "daemon") return;
       useReactionStore
         .getState()
         .hydrateFromMessages(
-          linked && hubPage.messages.length > 0
-            ? hubPage.messages
+          linked && cloudPage.messages.length > 0
+            ? cloudPage.messages
             : page.messages,
         );
       const olderLocal = page.messages.map(toUiMessage);
@@ -369,17 +369,17 @@ export function createTimelineActions(
         let older = olderLocal;
         if (linked) {
           older = mergeCloudAndLocalTimeline({
-            hubMessages: hubPage.messages,
+            cloudMessages: cloudPage.messages,
             localMessages: olderLocal,
           });
         }
         const mergedRaw = mergeMessagesOlder(older, existingWindow);
         const trimmed = trimMessagesHardMax(mergedRaw);
         const merged = trimmed.messages;
-        const hubHasOlder =
+        const cloudHasOlder =
           linked &&
-          (hubPage.nextBeforeSeq != null ||
-            hubPage.rawCount >= MESSAGE_PAGE_SIZE);
+          (cloudPage.nextBeforeSeq != null ||
+            cloudPage.rawCount >= MESSAGE_PAGE_SIZE);
         return {
           messagesByConversation: {
             ...s.messagesByConversation,
@@ -388,7 +388,7 @@ export function createTimelineActions(
           messageHistoryByConversation: {
             ...s.messageHistoryByConversation,
             [conversationId]: messageHistoryFromWindow(merged, {
-              hasOlderHub: hubHasOlder || trimmed.trimmed,
+              hasOlderCloud: cloudHasOlder || trimmed.trimmed,
               hasOlderHost: page.hasMore || trimmed.trimmed,
               loadingOlder: false,
             }),

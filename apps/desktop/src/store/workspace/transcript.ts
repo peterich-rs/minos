@@ -475,7 +475,7 @@ export function createTranscriptActions(
 
   /**
    * Attention page queue (heavy). Badge does NOT use this list — badge is
-   * Σ project.needsAttention over ConversationLists for known projects (§6.5).
+   * Σ project.needsAttention over ConversationLists for known projects.
    */
   };
 }

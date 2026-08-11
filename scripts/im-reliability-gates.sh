@@ -100,11 +100,10 @@ fi
 
 # ---------------------------------------------------------------------------
 # 4) presence "callers should" lies (production code + architecture docs)
-#    Specs that describe deleting the lie are excluded.
+#    Historical work artifacts are not part of the repository.
 # ---------------------------------------------------------------------------
 lies="$(
   rg -n 'callers should check presence|caller should check presence' \
-    --glob '!**/docs/superpowers/specs/**' \
     --glob '!**/EVIDENCE.md' \
     --glob '!scripts/**' \
     crates/ apps/ docs/architecture-*.md 2>/dev/null || true

@@ -1,7 +1,7 @@
 //! mars-xlog wiring for the Mac-side daemon process.
 //!
 //! Layout: `$MINOS_HOME/logs/<name_prefix>-YYYYMMDD.xlog`. Use prefix
-//! `daemon` per spec §9.4. Decoder: `decode_mars_nocrypt_log_file.py` from
+//! `daemon`. Decoder: `decode_mars_nocrypt_log_file.py` from
 //! the upstream Mars repo (Tencent).
 
 use std::path::PathBuf;
@@ -55,7 +55,7 @@ pub fn init() -> Result<(), MinosError> {
     Ok(())
 }
 
-/// Toggle level at runtime (for the menubar "diagnostics" switch in plan 02).
+/// Toggle level at runtime (for the menubar "diagnostics" switch).
 pub fn set_debug(enabled: bool) {
     if let Some(h) = HANDLE.get() {
         h.set_level(if enabled {
@@ -68,7 +68,7 @@ pub fn set_debug(enabled: bool) {
 
 /// Return an absolute path to the current day's xlog file, after flushing
 /// pending writes to disk. Swift uses this for "在 Finder 中显示今日日志…"
-/// (spec §6.4).
+/// (user-facing diagnostics feature).
 ///
 /// Errors:
 /// - `StoreIo` if the expected file does not exist (no log record written yet).

@@ -92,9 +92,9 @@ type AccountState = {
   retryCloudConnection: () => Promise<void>;
 
   /** Sync Host readiness from latest daemon cloudOnline (polling). */
-  syncCloudFromHub: (cloudOnline: boolean | undefined) => void;
+  syncCloudFromCloud: (cloudOnline: boolean | undefined) => void;
   /** Sync Account IM Online from `/ws/client` realtime state. */
-  syncAccountFromHub: (
+  syncAccountFromCloud: (
     state: "disconnected" | "connecting" | "syncing" | "live" | "error" | string,
   ) => void;
 
@@ -431,7 +431,7 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
     await get().ensureCloudConnection({ forceReregister: true });
   },
 
-  syncCloudFromHub: (cloudOnline) => {
+  syncCloudFromCloud: (cloudOnline) => {
     const { session, cloudStatus } = get();
     if (!session) return;
     // Do not clobber an in-flight ensure.
@@ -450,7 +450,7 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
     }
   },
 
-  syncAccountFromHub: (state) => {
+  syncAccountFromCloud: (state) => {
     const { session } = get();
     if (!session) {
       if (get().accountSyncStatus !== "unknown") {

@@ -2,7 +2,7 @@
 //! and replays its events through [`EventWriter::write_recovery`] so the
 //! local DB can be repaired before the host advertises/pulls a missing range.
 //!
-//! Phase D Task D4. Lives outside `agent-runtime/src/exec_jsonl.rs`
+//! Lives outside `agent-runtime/src/exec_jsonl.rs`
 //! (which was the live JSONL exec driver and has been deleted): this is
 //! a post-hoc parser, not a runtime driver.
 //!

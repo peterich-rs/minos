@@ -376,7 +376,7 @@ export function createUseCasesActions(
     const count = conv?.messageCount ?? 0;
     // Focus + rail clear immediately (focused ≠ hasWindow).
     // Quiet loadTimeline must never set focus; only open / mark-read does.
-    // P1: local baseline only matters for daemon-only; Hub path clears digest.
+    // local baseline only matters for daemon-only; Hub path clears digest.
     set((s) => ({
       focusedConversationId: conversationId,
       readMessageCountById: {
@@ -417,7 +417,7 @@ export function createUseCasesActions(
         return;
       }
       try {
-        await cloud.markHubConversationRead(
+        await cloud.markCloudConversationRead(
           deviceId,
           session.accessToken,
           conversationId,
@@ -550,7 +550,7 @@ export function createUseCasesActions(
 
       // Collaboration write authority is Hub only. "sent" comes from ChatSendAck
       // (or durable echo); local daemon workbench is a projection after Ack.
-      const hubAck = await syncUserMessageToCloud({
+      const cloudAck = await syncUserMessageToCloud({
         conversationId,
         messageId: resolvedId,
         text: messageBody,
@@ -562,7 +562,7 @@ export function createUseCasesActions(
         mentions:
           structuredMentions.length > 0 ? structuredMentions : undefined,
       });
-      const messageSeq = hubAck?.messageSeq;
+      const messageSeq = cloudAck?.messageSeq;
       patchDelivery("sent", messageSeq, clock);
       patchRailActivity(set, conversationId, railPreview, createdAtMs);
       // Optional local workbench projection (idempotent by message_id) — not write authority.
@@ -683,7 +683,7 @@ export function createUseCasesActions(
 
       const retryAt = failed.createdAtMs ?? Date.now();
       const retryClock = formatLocalClock(retryAt) || formatLocalClock(Date.now());
-      const hubAck = await syncUserMessageToCloud({
+      const cloudAck = await syncUserMessageToCloud({
         conversationId,
         messageId,
         text: messageBody,
@@ -701,7 +701,7 @@ export function createUseCasesActions(
         mentions:
           structuredMentions.length > 0 ? structuredMentions : undefined,
       });
-      patchDelivery("sent", hubAck?.messageSeq);
+      patchDelivery("sent", cloudAck?.messageSeq);
       set((s) => ({
         messagesByConversation: {
           ...s.messagesByConversation,

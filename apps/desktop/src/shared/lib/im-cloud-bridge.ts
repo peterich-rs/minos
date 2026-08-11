@@ -12,7 +12,7 @@ import {
   CloudRealtimeSession,
   type CloudRealtimeSyncState,
 } from "@/shared/lib/cloud-realtime";
-import { mapHubChatMessageToTimeline } from "@/shared/lib/im-cloud-inbound";
+import { mapCloudChatMessageToTimeline } from "@/shared/lib/im-cloud-inbound";
 import {
   isCloudImMode,
   mergeCloudAndLocalTimeline,
@@ -21,8 +21,8 @@ import {
 } from "@/shared/lib/cloud-timeline";
 import { startImOutboxWorker } from "@/shared/lib/im-cloud-sync";
 import {
-  pullHubConversationMessagePage,
-  pullHubForwardGap,
+  pullCloudConversationMessagePage,
+  pullCloudForwardGap,
 } from "@/shared/lib/im-cloud-inbound";
 import {
   EMPTY_MESSAGE_HISTORY,
@@ -42,13 +42,13 @@ import {
 } from "@/shared/lib/rail-activity";
 import { useAccountStore } from "@/store/account-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
-import type { HubChatMessage } from "@/shared/lib/minos-cloud";
+import type { CloudChatMessage } from "@/shared/lib/minos-cloud";
 import type { TimelineMessage } from "@/shared/lib/mock-data";
 
 let session: CloudRealtimeSession | null = null;
 let startedForToken: string | null = null;
 let lastSyncState: CloudRealtimeSyncState = "disconnected";
-/** C6.1 lifecycle listeners registered once per process. */
+/** Lifecycle listeners registered once per process. */
 let lifecycleBound = false;
 
 /**
@@ -82,7 +82,7 @@ let markReadTimer: ReturnType<typeof setTimeout> | null = null;
 let markReadPendingConversationId: string | null = null;
 
 /**
- * C6.1: visibility / online / focus → pause ping while hidden; force reconnect
+ * visibility / online / focus → pause ping while hidden; force reconnect
  * when shown or network returns and state is not live.
  */
 function ensureLifecycleHandlers(): void {
@@ -91,7 +91,7 @@ function ensureLifecycleHandlers(): void {
 
   const maybeForceReconnect = (reason: string) => {
     if (!session) return;
-    // Spec C6.1: show/online → if state ≠ live, force reconnect.
+    // show/online → if state ≠ live, force reconnect.
     if (session.state === "live") return;
     console.info("[im-cloud-bridge] forceReconnect", reason, session.state);
     session.forceReconnect();
@@ -145,7 +145,7 @@ function ensureLifecycleHandlers(): void {
 }
 
 /**
- * Schedule Hub + local mark-read for the focused conversation (C4).
+ * Schedule Hub + local mark-read for the focused conversation.
  * Coalesces bursts of inbound messages — same 400ms semantics as Mobile.
  * No-op if focus moved away before the timer fires.
  */
@@ -177,12 +177,12 @@ export function cancelPendingFocusedMarkRead(): void {
   markReadPendingConversationId = null;
 }
 
-async function onHubChatMessage(message: HubChatMessage): Promise<void> {
+async function onCloudChatMessage(message: CloudChatMessage): Promise<void> {
   if (message.recalledAtMs) {
-    await onHubChatMessageRecalled(message);
+    await onCloudChatMessageRecalled(message);
     return;
   }
-  const ui = await mapHubChatMessageToTimeline(message);
+  const ui = await mapCloudChatMessageToTimeline(message);
   if (!ui) return;
 
   const ws = useWorkspaceStore.getState();
@@ -214,7 +214,7 @@ async function onHubChatMessage(message: HubChatMessage): Promise<void> {
           ...s.messageHistoryByConversation,
           [conversationId]: messageHistoryFromWindow(trimmed.messages, {
             prev: prevHist,
-            hasOlderHub: prevHist.hasOlderHub || trimmed.trimmed,
+            hasOlderCloud: prevHist.hasOlderCloud || trimmed.trimmed,
             hasOlderHost: prevHist.hasOlderHost,
             loadingOlder: false,
           }),
@@ -224,7 +224,7 @@ async function onHubChatMessage(message: HubChatMessage): Promise<void> {
   }
 
   // Live patch Hub digest + rail row (no per-project Hub re-query).
-  patchRailFromHubMessage(message, { isRecall: false });
+  patchRailFromCloudMessage(message, { isRecall: false });
 
   // Focused live inbound: debounce Hub mark-read (not only on open).
   if (focused) {
@@ -232,9 +232,9 @@ async function onHubChatMessage(message: HubChatMessage): Promise<void> {
   }
 }
 
-/** Apply account durable / live message into HubDigestCache + workspace rail. */
-function patchRailFromHubMessage(
-  message: HubChatMessage,
+/** Apply account durable / live message into CloudDigestCache + workspace rail. */
+function patchRailFromCloudMessage(
+  message: CloudChatMessage,
   opts: { isRecall: boolean },
 ): void {
   patchRailFromDigest({
@@ -252,7 +252,7 @@ function patchRailFromHubMessage(
 
 /**
  * R3: account-topic thin digest → rail/inbox only (no timeline body).
- * Conversation full frames still call {@link patchRailFromHubMessage}.
+ * Conversation full frames still call {@link patchRailFromCloudMessage}.
  * Unread is messageId-deduped so T1 + T2 never double-count the same bubble.
  *
  * lastMessageAtMs rules:
@@ -393,7 +393,7 @@ function onAccountInboxDigest(digest: {
   }
 }
 
-async function onHubChatMessageRecalled(message: HubChatMessage): Promise<void> {
+async function onCloudChatMessageRecalled(message: CloudChatMessage): Promise<void> {
   const conversationId = message.conversationId;
   const messageId = message.messageId;
   if (!conversationId || !messageId) return;
@@ -417,7 +417,7 @@ async function onHubChatMessageRecalled(message: HubChatMessage): Promise<void> 
       },
     };
   });
-  patchRailFromHubMessage(message, { isRecall: true });
+  patchRailFromCloudMessage(message, { isRecall: true });
 }
 
 function conversationIdFromTopic(topic: string): string | null {
@@ -451,7 +451,7 @@ async function onSnapshotRequired(topic: string): Promise<void> {
     return;
   }
 
-  await reconcileConversationFromHub(conversationId);
+  await reconcileConversationFromCloud(conversationId);
 }
 
 /**
@@ -460,7 +460,7 @@ async function onSnapshotRequired(topic: string): Promise<void> {
  * - Multi-page forward-fill with after_seq until empty or cursor stalls.
  * - Latest page calibrates tail; optional multi-page before_seq repair for floor.
  */
-async function reconcileConversationFromHub(
+async function reconcileConversationFromCloud(
   conversationId: string,
 ): Promise<void> {
   const prev =
@@ -468,18 +468,18 @@ async function reconcileConversationFromHub(
   const maxSeq = lastMessageSeq(prev);
   const minSeq = firstMessageSeq(prev);
 
-  const hubChunks: TimelineMessage[] = [];
+  const cloudChunks: TimelineMessage[] = [];
 
   if (maxSeq != null) {
     try {
       let cursor = maxSeq;
       // Cap pages to avoid unbounded work on huge gaps (still multi-page).
       for (let page = 0; page < 20; page += 1) {
-        const forward = await pullHubForwardGap(conversationId, cursor, {
+        const forward = await pullCloudForwardGap(conversationId, cursor, {
           limit: MESSAGE_PAGE_SIZE,
         });
         if (forward.length === 0) break;
-        hubChunks.push(...forward);
+        cloudChunks.push(...forward);
         const nextMax = lastMessageSeq(forward);
         if (nextMax == null || nextMax <= cursor) break;
         cursor = nextMax;
@@ -494,10 +494,10 @@ async function reconcileConversationFromHub(
   }
 
   // Latest page: always calibrate tail (and cold-open when window empty).
-  const latestPage = await pullHubConversationMessagePage(conversationId, {
+  const latestPage = await pullCloudConversationMessagePage(conversationId, {
     limit: MESSAGE_PAGE_SIZE,
   });
-  hubChunks.push(...latestPage.messages);
+  cloudChunks.push(...latestPage.messages);
 
   // When the window has a known min seq and latest page does not cover down to
   // it, page older via before_seq until floor is covered or pages exhaust.
@@ -506,12 +506,12 @@ async function reconcileConversationFromHub(
     try {
       for (let page = 0; page < 20; page += 1) {
         if (latestMin == null || latestMin <= minSeq) break;
-        const older = await pullHubConversationMessagePage(conversationId, {
+        const older = await pullCloudConversationMessagePage(conversationId, {
           beforeSeq: latestMin,
           limit: MESSAGE_PAGE_SIZE,
         });
         if (older.messages.length === 0) break;
-        hubChunks.push(...older.messages);
+        cloudChunks.push(...older.messages);
         const nextMin = firstMessageSeq(older.messages);
         if (nextMin == null || nextMin >= latestMin) break;
         latestMin = nextMin;
@@ -526,18 +526,18 @@ async function reconcileConversationFromHub(
   }
 
   // Dedupe hub chunk by id (later chunks win).
-  const hubById = new Map<string, TimelineMessage>();
-  for (const m of hubChunks) {
-    hubById.set(m.id, m);
+  const cloudById = new Map<string, TimelineMessage>();
+  for (const m of cloudChunks) {
+    cloudById.set(m.id, m);
   }
-  const hubRows = [...hubById.values()];
+  const cloudRows = [...cloudById.values()];
 
   // Hydrate reactions from reconciled Hub rows (cold path).
   try {
     const { useReactionStore } = await import(
       "@/features/chat/reaction-store"
     );
-    useReactionStore.getState().hydrateFromMessages(hubRows);
+    useReactionStore.getState().hydrateFromMessages(cloudRows);
   } catch {
     /* reaction store optional in tests */
   }
@@ -549,14 +549,14 @@ async function reconcileConversationFromHub(
     // Quiet-tail union keeps previously loaded older pages across snapshot.
     const withTail =
       localPrev.length > 0
-        ? mergeMessagesQuietTail(localPrev, hubRows)
-        : hubRows;
+        ? mergeMessagesQuietTail(localPrev, cloudRows)
+        : cloudRows;
     const merged = mergeCloudAndLocalTimeline({
-      hubMessages: hubRows,
+      cloudMessages: cloudRows,
       localMessages: withTail,
     });
     const trimmed = trimMessagesHardMax(merged);
-    const hubHasOlder =
+    const cloudHasOlder =
       latestPage.nextBeforeSeq != null ||
       latestPage.rawCount >= MESSAGE_PAGE_SIZE ||
       trimmed.trimmed;
@@ -569,7 +569,7 @@ async function reconcileConversationFromHub(
         ...s.messageHistoryByConversation,
         [conversationId]: messageHistoryFromWindow(trimmed.messages, {
           prev: prevHist,
-          hasOlderHub: prevHist.hasOlderHub || hubHasOlder,
+          hasOlderCloud: prevHist.hasOlderCloud || cloudHasOlder,
           hasOlderHost: prevHist.hasOlderHost || trimmed.trimmed,
           loadingOlder: false,
         }),
@@ -599,10 +599,10 @@ export function ensureImCloudBridge(): void {
   stopImCloudBridge();
   session = new CloudRealtimeSession({
     onChatMessage: (msg) => {
-      void onHubChatMessage(msg);
+      void onCloudChatMessage(msg);
     },
     onChatMessageRecalled: (msg) => {
-      void onHubChatMessageRecalled(msg);
+      void onCloudChatMessageRecalled(msg);
     },
     onAccountInboxDigest: (digest) => {
       onAccountInboxDigest(digest);
@@ -639,7 +639,7 @@ export function ensureImCloudBridge(): void {
     onConnectionChange: (state) => {
       lastSyncState = state;
       // Primary product Online = Account IM (`/ws/client`), not Host alone.
-      useAccountStore.getState().syncAccountFromHub(state);
+      useAccountStore.getState().syncAccountFromCloud(state);
       if (state === "live" || state === "syncing") {
         const focused = useWorkspaceStore.getState().focusedConversationId;
         if (focused) {
@@ -650,7 +650,7 @@ export function ensureImCloudBridge(): void {
   });
   startedForToken = token;
   // Connecting until first onConnectionChange.
-  useAccountStore.getState().syncAccountFromHub("connecting");
+  useAccountStore.getState().syncAccountFromCloud("connecting");
   session.start(deviceId, token, accountId);
   ensureLifecycleHandlers();
   // Drain durable Desktop → Hub user-message Outbox after auth is ready.
@@ -662,7 +662,7 @@ export function stopImCloudBridge(): void {
   session = null;
   startedForToken = null;
   lastSyncState = "disconnected";
-  useAccountStore.getState().syncAccountFromHub("disconnected");
+  useAccountStore.getState().syncAccountFromCloud("disconnected");
   cancelPendingFocusedMarkRead();
 }
 
@@ -810,14 +810,14 @@ export async function recallMessageOnCloud(
   ) {
     throw new Error("Hub recall requires authenticated account");
   }
-  const { recallHubMessage } = await import("@/shared/lib/minos-cloud");
-  const recalled = await recallHubMessage(
+  const { recallCloudMessage } = await import("@/shared/lib/minos-cloud");
+  const recalled = await recallCloudMessage(
     deviceId,
     session.accessToken,
     conversationId,
     messageId,
   );
-  await onHubChatMessageRecalled(recalled);
+  await onCloudChatMessageRecalled(recalled);
 }
 
 /** Topic string helper for tests / diagnostics. */

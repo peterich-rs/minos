@@ -1,15 +1,15 @@
 /**
- * Single-flight ensure for HubDigestCache hydrate.
+ * Single-flight ensure for CloudDigestCache hydrate.
  */
 
 import { cloudDigestCache } from "@/shared/lib/cloud-digest-cache";
-import { listHubConversations } from "@/shared/lib/minos-cloud";
+import { listCloudConversations } from "@/shared/lib/minos-cloud";
 import { useAccountStore } from "@/store/account-store";
 import { isCloudImMode } from "@/shared/lib/cloud-timeline";
 
 let hydrateInFlight: Promise<void> | null = null;
 
-/** Hydrate HubDigestCache once (or after invalidate). Concurrent callers share one request. */
+/** Hydrate CloudDigestCache once (or after invalidate). Concurrent callers share one request. */
 export async function ensureCloudDigestHydrated(
   opts?: { force?: boolean },
 ): Promise<void> {
@@ -46,7 +46,7 @@ export async function ensureCloudDigestHydrated(
       if (opts?.force) {
         cloudDigestCache.invalidate();
       }
-      const digests = await listHubConversations(
+      const digests = await listCloudConversations(
         deviceId,
         session.accessToken,
       );

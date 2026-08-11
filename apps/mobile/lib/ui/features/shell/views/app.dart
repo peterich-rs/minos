@@ -72,10 +72,10 @@ class _MinosAppState extends ConsumerState<MinosApp>
         ..invalidate(agentProfilesControllerProvider);
     });
 
-    // C6.2: App-root outbox worker bootstrap (cold start without Messages tab).
+    // App-root outbox worker bootstrap (cold start without Messages tab).
     ref.watch(imOutboxBootstrapProvider);
-    // Hub bot bulk-import on Authenticated edge (not from profile controller build).
-    ref.watch(hubBotImportBootstrapProvider);
+    // Cloud bot bulk-import on Authenticated edge (not from profile controller build).
+    ref.watch(cloudBotImportBootstrapProvider);
 
     final router = ref.watch(routerProvider);
 

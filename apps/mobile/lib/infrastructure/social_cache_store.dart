@@ -324,8 +324,8 @@ class SocialCacheStore {
     if (db == null) {
       return const <SocialChatMessage>[];
     }
-    // SQL order is a best-effort index path; canonical order is decision 5
-    // (seq primary for durable; optimistic without seq at tail). Never
+    // SQL order is a best-effort index path; canonical order is seq primary
+    // for durable rows, optimistic-without-seq at tail. Never
     // COALESCE(server_order_key, created_at_ms) — different dimensions.
     final rows = await db.query(
       'cached_social_messages',

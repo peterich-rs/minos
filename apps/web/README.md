@@ -45,7 +45,7 @@ The backend process needs matching IdP config:
 ```bash
 export SUPABASE_URL=https://<project-ref>.supabase.co
 export SUPABASE_JWT_AUD=authenticated   # default if omitted
-# If exchange returns invalid_supabase_token, also set the legacy JWT secret
+# If exchange returns invalid_supabase_token, also set the HMAC JWT secret
 # from Dashboard → Project Settings → API → JWT Secret:
 # export SUPABASE_JWT_SECRET='…'
 export MINOS_JWT_SECRET='…at least 32 bytes…'

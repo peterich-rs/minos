@@ -195,14 +195,14 @@ export type TimelineMessage = {
   /**
    * Social total-order key: Hub `message_seq` when linked, host daemon seq only
    * for local-only (unlinked) workbench chat. Host tool/git cards must not use
-   * this field for cross-source order — use `anchorHubMessageSeq` + `suborder`.
+   * this field for cross-source order — use `anchorCloudMessageSeq` + `suborder`.
    */
   messageSeq?: number;
   /**
    * Host-only cards: place after the Hub bubble with this social seq.
    * Undefined = unanchored (sort after social rows, before optimistic tail).
    */
-  anchorHubMessageSeq?: number;
+  anchorCloudMessageSeq?: number;
   /** Among host cards with the same anchor (or unanchored), local order. */
   suborder?: number;
   /** Daemon host seq for host-only pagination (never mixed into Hub before_seq). */

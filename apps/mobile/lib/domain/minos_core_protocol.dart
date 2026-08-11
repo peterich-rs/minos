@@ -170,7 +170,7 @@ abstract class MinosCoreProtocol {
   /// Translated UI event history for one session.
   Future<ReadSessionResponse> readThread(ReadSessionParams params);
 
-  // ---- Projects (Phase P) ----
+  // ---- Projects ----
 
   /// Create a new project on the daemon.
   Future<CreateProjectResponse> createProject({
@@ -236,11 +236,10 @@ abstract class MinosCoreProtocol {
   /// Pause an in-flight turn while keeping the session resumable.
   Future<void> interruptThread({required String sessionId});
 
-  /// Close an agent session by its `session_id`. Replaces the pre-Phase-C
-  /// `stop_agent()` surface — the multi-thread `AgentManager` keys lifecycle
-  /// operations on `session_id` rather than implicitly on the single active
-  /// session. Idempotent on the daemon side; calling for an already-closed
-  /// thread is a benign no-op.
+  /// Close an agent session by its `session_id`. The multi-thread
+  /// `AgentManager` keys lifecycle operations on `session_id` rather than
+  /// implicitly on the single active session. Idempotent on the daemon side;
+  /// calling for an already-closed thread is a benign no-op.
   Future<void> closeThread({required String sessionId});
 
   /// Permanently delete a thread. Used exclusively for the swipe-to-delete

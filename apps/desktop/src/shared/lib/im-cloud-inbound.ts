@@ -9,10 +9,10 @@
  */
 
 import {
-  listHubConversationMessages,
+  listCloudConversationMessages,
   listCloudAgents,
-  type HubChatMessage,
-  type HubMessagePage,
+  type CloudChatMessage,
+  type CloudMessagePage,
 } from "@/shared/lib/minos-cloud";
 import { cloudChatMessageToTimeline } from "@/shared/lib/cloud-timeline";
 import { useAccountStore } from "@/store/account-store";
@@ -51,8 +51,8 @@ export async function ensureAgentRuntimeMap(): Promise<Map<string, string>> {
 }
 
 /** Map one hub message to a timeline row (no daemon write). */
-export async function mapHubChatMessageToTimeline(
-  message: HubChatMessage,
+export async function mapCloudChatMessageToTimeline(
+  message: CloudChatMessage,
 ): Promise<TimelineMessage | null> {
   await ensureAgentRuntimeMap();
   return cloudChatMessageToTimeline(message, {
@@ -60,7 +60,7 @@ export async function mapHubChatMessageToTimeline(
   });
 }
 
-function mapPageToTimeline(page: HubMessagePage): {
+function mapPageToTimeline(page: CloudMessagePage): {
   messages: TimelineMessage[];
   nextBeforeSeq: number | null;
   rawCount: number;
@@ -95,16 +95,16 @@ function mapPageToTimeline(page: HubMessagePage): {
  * Cold pull hub messages for a conversation → TimelineMessage[] (Hub SSOT).
  * Does **not** write into Host daemon chat_messages.
  */
-export async function pullHubConversationMessages(
+export async function pullCloudConversationMessages(
   conversationId: string,
   opts?: { beforeSeq?: number; afterSeq?: number; limit?: number },
 ): Promise<TimelineMessage[]> {
-  const page = await pullHubConversationMessagePage(conversationId, opts);
+  const page = await pullCloudConversationMessagePage(conversationId, opts);
   return page.messages;
 }
 
 /** Cold pull with gap cursor (`before_seq` / `after_seq`). */
-export async function pullHubConversationMessagePage(
+export async function pullCloudConversationMessagePage(
   conversationId: string,
   opts?: { beforeSeq?: number; afterSeq?: number; limit?: number },
 ): Promise<{
@@ -117,7 +117,7 @@ export async function pullHubConversationMessagePage(
     return { messages: [], nextBeforeSeq: null, rawCount: 0 };
   }
   try {
-    const page = await listHubConversationMessages(
+    const page = await listCloudConversationMessages(
       auth.deviceId,
       auth.accessToken,
       conversationId,
@@ -139,7 +139,7 @@ export async function pullHubConversationMessagePage(
  * Forward gap fill: messages with `message_seq > afterSeq` (ASC on wire, mapped).
  * Used by SnapshotRequired range reconcile and live gap recovery.
  */
-export async function pullHubForwardGap(
+export async function pullCloudForwardGap(
   conversationId: string,
   afterSeq: number,
   opts?: { limit?: number },
@@ -147,7 +147,7 @@ export async function pullHubForwardGap(
   if (!Number.isFinite(afterSeq) || afterSeq < 0) {
     return [];
   }
-  const page = await pullHubConversationMessagePage(conversationId, {
+  const page = await pullCloudConversationMessagePage(conversationId, {
     afterSeq,
     limit: opts?.limit ?? MESSAGE_PAGE_SIZE,
   });

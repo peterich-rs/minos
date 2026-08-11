@@ -7,7 +7,7 @@
  * 3. Live Account* durables / mark-read: patchOne only
  * 4. SnapshotRequired on account topic / explicit refresh: invalidate then hydrate
  *
- * Focus semantics (C3/C4):
+ * Focus semantics:
  * - focusedConversationId is set only by open/select (Timeline mount →
  *   markConversationRead) — never by loadTimeline (quiet or full).
  * - Focused live inbound: local unread stays 0; Hub mark-read is debounced

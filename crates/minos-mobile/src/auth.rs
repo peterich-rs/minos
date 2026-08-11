@@ -3,8 +3,6 @@
 //! Persistence lives in [`crate::store`] via `flutter_secure_storage` on the
 //! Dart side; this module only shapes the live snapshot held in memory and
 //! the watch-channel frame the Dart side observes.
-//!
-//! Spec §6.1.
 
 use std::sync::Arc;
 use std::time::Instant;

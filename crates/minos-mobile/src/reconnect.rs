@@ -1,4 +1,4 @@
-//! Auto-reconnect controller. Spec §6.3.
+//! Auto-reconnect controller.
 //!
 //! The reconnect loop in [`crate::client::MobileClient`] consults this state
 //! between attempts: it asks for the next backoff delay, sleeps, then asks
@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
 /// Backoff state machine consulted by the reconnect loop. Owns no IO of
-/// its own — the loop drives the actual `connect`. Spec §6.3.
+/// its own — the loop drives the actual `connect`.
 #[derive(Debug)]
 pub(crate) struct ReconnectController {
     state: RwLock<ReconnectState>,

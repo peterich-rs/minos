@@ -382,7 +382,7 @@ pub struct PushStatusDto {
     pub live: bool,
 }
 
-/// Host Link prepare material (D02 §7.2 / daemon `host_prepare_link`).
+/// Host Link prepare material (daemon `host_prepare_link`).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HostPrepareLinkDto {

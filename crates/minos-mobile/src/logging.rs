@@ -1,6 +1,6 @@
 //! mars-xlog wiring for the mobile-side core process.
 //!
-//! Sink directory comes from the Dart layer (frb-callback in plan 03) so that
+//! Sink directory comes from the Dart layer (frb-callback) so that
 //! `iOS app Documents/Minos/Logs/` is honored even though Rust doesn't know
 //! the exact app sandbox path. For unit-test builds, callers may pass a
 //! tempdir directly.
@@ -19,7 +19,7 @@ static HANDLE: OnceLock<XlogLayerHandle> = OnceLock::new();
 const NAME_PREFIX: &str = "mobile-rust";
 
 /// Initialize logging for the mobile-side Rust core. `log_dir` is supplied by
-/// the host (Dart side via frb in plan 03; tempdir in tests).
+/// the host (Dart side via frb; tempdir in tests).
 #[allow(clippy::missing_errors_doc)]
 pub fn init(log_dir: &Path) -> Result<(), MinosError> {
     if HANDLE.get().is_some() {

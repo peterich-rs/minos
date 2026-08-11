@@ -23,7 +23,7 @@ function isOptimisticNoSeq(message: TimelineMessage): boolean {
 type SortKey = {
   /** 0 = durable social/host; 1 = optimistic tail */
   domain: number;
-  /** Hub message_seq or anchorHubMessageSeq */
+  /** Hub message_seq or anchorCloudMessageSeq */
   primary: number;
   /** 0 for chat bubbles; host card suborder after same primary */
   secondary: number;
@@ -43,7 +43,7 @@ function sortKey(message: TimelineMessage): SortKey {
   }
 
   if (isHostOnlyTimelineCard(message)) {
-    const anchor = message.anchorHubMessageSeq;
+    const anchor = message.anchorCloudMessageSeq;
     if (anchor != null && Number.isFinite(anchor)) {
       return {
         domain: 0,
@@ -99,7 +99,7 @@ function compareKeys(a: SortKey, b: SortKey): number {
  *
  * Linked (Hub SSOT):
  * - Chat bubbles order by Hub `messageSeq` ASC.
- * - Host-only cards order by `anchorHubMessageSeq` then `suborder` (after anchor bubble).
+ * - Host-only cards order by `anchorCloudMessageSeq` then `suborder` (after anchor bubble).
  * - Optimistic sending/failed without seq form a separate tail domain.
  *
  * Never uses wall-clock as the primary durable social order domain.

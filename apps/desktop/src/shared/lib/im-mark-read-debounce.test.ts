@@ -1,5 +1,5 @@
 /**
- * Pure contract for focused live mark-read debounce (C4 review).
+ * Pure contract for focused live mark-read debounce.
  * Timer behavior is exercised via scheduleFocusedMarkRead export shape;
  * workspace store is mocked at call boundary in integration if needed.
  */

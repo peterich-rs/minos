@@ -1,5 +1,5 @@
 /**
- * C3 TimelineSync pure helpers: max seq + quiet-tail merge used by
+ * TimelineSync pure helpers: max seq + quiet-tail merge used by
  * SnapshotRequired range reconcile (no clear-only).
  */
 import assert from "node:assert/strict";
@@ -40,12 +40,12 @@ describe("TimelineSync range reconcile helpers", () => {
       msg({ id: "tail", messageSeq: 10, body: "stale tail" }),
     ];
     // Snapshot latest page + forward gap (no blank clear).
-    const hubChunk = [
+    const cloudChunk = [
       msg({ id: "mid", messageSeq: 5, body: "mid" }),
       msg({ id: "tail", messageSeq: 10, body: "fresh tail" }),
       msg({ id: "new", messageSeq: 11, body: "forward" }),
     ];
-    const merged = mergeMessagesQuietTail(prev, hubChunk);
+    const merged = mergeMessagesQuietTail(prev, cloudChunk);
     assert.deepEqual(
       merged.map((m) => m.id),
       ["old", "mid", "tail", "new"],

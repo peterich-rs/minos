@@ -432,7 +432,7 @@ impl MobileClient {
         Ok(())
     }
 
-    /// Open-chat live path (R3a): subscribe `conversation:{id}` for full T1
+    /// Open-chat live path: subscribe `conversation:{id}` for full T1
     /// message/reaction frames. Account topic remains digest-only for inbox.
     pub async fn subscribe_conversation(&self, conversation_id: String) -> Result<(), MinosError> {
         let id = conversation_id.trim();
@@ -449,7 +449,7 @@ impl MobileClient {
         Ok(())
     }
 
-    /// Leave open-chat conversation topic (R3a). Safe if not currently subscribed.
+    /// Leave open-chat conversation topic. Safe if not currently subscribed.
     pub async fn unsubscribe_conversation(
         &self,
         conversation_id: String,
@@ -1265,7 +1265,7 @@ impl MobileClient {
     }
 
     /// Subscribe to auth-state transitions. The first read on the receiver
-    /// returns the current cached frame. Spec §6.1.
+    /// returns the current cached frame.
     #[must_use]
     pub fn subscribe_auth_state(&self) -> watch::Receiver<AuthStateFrame> {
         self.auth_state_rx.clone()
@@ -1295,7 +1295,7 @@ impl MobileClient {
     /// transitions to `Refreshing` for the duration of the call; on
     /// success it returns to `Authenticated` (with the same account
     /// summary), on failure the session is wiped and the watch publishes
-    /// `RefreshFailed`. Spec §5.4 / §6.1.
+    /// `RefreshFailed`.
     pub async fn refresh_session(&self) -> Result<(), MinosError> {
         let session = self.auth_session.read().await.clone().ok_or_else(|| {
             MinosError::AuthRefreshFailed {
@@ -1470,7 +1470,7 @@ impl MobileClient {
 
     /// Notify the reconnect controller that the iOS app moved to the
     /// foreground. Resets backoff and clears the paused flag so the loop
-    /// reconnects immediately. Spec §6.3 / §8.3.
+    /// reconnects immediately.
     ///
     /// Sync wrapper so Dart's `WidgetsBindingObserver` (main isolate) can
     /// call without an awaitable; the actual mutation is async-safe. If
@@ -1494,7 +1494,7 @@ impl MobileClient {
     /// Notify the reconnect controller that the iOS app moved to the
     /// background. Starts a short grace window before pausing reconnects
     /// so brief app switches do not force an immediate reconnect on
-    /// return. Spec §6.3 / §8.3. Same runtime-handling shape as
+    /// return. Same runtime-handling shape as
     /// `notify_foregrounded`.
     pub fn notify_backgrounded(&self) {
         let r = self.reconnect.clone();
@@ -1842,7 +1842,7 @@ struct ReconnectContext {
 
 /// Reconnect loop owned by [`MobileClient::ensure_reconnect_loop`].
 ///
-/// Spec §6.3:
+/// Behavior:
 /// - Sleeps `reconnect.next_delay()` between attempts.
 /// - Honours `reconnect.is_paused()` after the background grace window.
 /// - Refreshes the access token if its expiry is within 2 minutes, even while
@@ -1980,7 +1980,7 @@ async fn connected_refresh_delay(ctx: &ReconnectContext) -> Duration {
 
 /// Inline-refresh path used by [`reconnect_loop`]. Returns `true` on
 /// success (or when there's no session to refresh), `false` on failure
-/// (publishes RefreshFailed and clears auth state). Spec §6.3.
+/// (publishes RefreshFailed and clears auth state).
 async fn refresh_inline(ctx: &ReconnectContext, backend_url: &str) -> bool {
     // Hoist the session check above `Refreshing` so a no-op refresh
     // (no session) doesn't publish a `Refreshing → ?` transition with

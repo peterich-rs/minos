@@ -1,7 +1,7 @@
 /**
  * L3a ConversationList hydrate.
  *
- * Hub IM mode: daemon list(project) ∥ HubDigestCache (single account hydrate);
+ * Hub IM mode: daemon list(project) ∥ CloudDigestCache (single account hydrate);
  * merge via conversation-list-merge. Never re-fetch Hub per project.
  */
 import type { Conversation } from "@/shared/lib/mock-data";
@@ -56,7 +56,7 @@ export function createConversationListActions(
 
           try {
             const { session, authPhase } = useAccountStore.getState();
-            const hubMode = isCloudImMode({
+            const cloudMode = isCloudImMode({
               authPhase,
               accessToken: session?.accessToken,
             });
@@ -74,7 +74,7 @@ export function createConversationListActions(
               })
               .catch((err) => {
                 // Auth without host: daemon may be down — still show Hub digests.
-                if (hubMode) {
+                if (cloudMode) {
                   console.warn(
                     "[conversation-list] daemon list failed; Hub-only merge",
                     err,
@@ -89,11 +89,11 @@ export function createConversationListActions(
             // Reuse live-patched digests (im-cloud-bridge patchOne). Never force-invalidate
             // from list load — force rewrites every rail row (visible flicker).
             // SnapshotRequired / reconnect paths own full digest rebuild.
-            const hubPromise = hubMode
+            const cloudPromise = cloudMode
               ? ensureCloudDigestHydrated()
               : Promise.resolve();
 
-            const [rows] = await Promise.all([daemonPromise, hubPromise]);
+            const [rows] = await Promise.all([daemonPromise, cloudPromise]);
             if (isStale()) return;
 
             const normalized = rows.map((row) =>
@@ -114,8 +114,8 @@ export function createConversationListActions(
             }
 
             let list: Conversation[];
-            if (hubMode) {
-              // P1: Hub digest is unread SSOT. Do not seed rail unread from
+            if (cloudMode) {
+              // Hub digest is unread SSOT. Do not seed rail unread from
               // readMessageCountById (local baseline is daemon-only fallback).
               const daemonUi = normalized
                 .filter((row) => Boolean(row.id))
@@ -127,9 +127,9 @@ export function createConversationListActions(
               // Hub-only rows live with empty projectId in a single global set.
               list = mergeConversationList({
                 daemonRows: daemonUi,
-                hubDigests: cloudDigestCache.getAll(),
+                cloudDigests: cloudDigestCache.getAll(),
                 projectId,
-                includeHubOnly: false,
+                includeCloudOnly: false,
                 focusedConversationId: focused,
                 unreadSource: "hub",
               });
@@ -151,14 +151,14 @@ export function createConversationListActions(
                 .map((c) => c.id)
                 .concat(list.map((c) => c.id)),
             );
-            const hubOnly = hubMode
+            const cloudOnly = cloudMode
               ? mergeConversationList({
                   daemonRows: [],
-                  hubDigests: cloudDigestCache.getAll().filter(
+                  cloudDigests: cloudDigestCache.getAll().filter(
                     (d) => !allDaemonIds.has(d.conversationId),
                   ),
                   projectId: "",
-                  includeHubOnly: true,
+                  includeCloudOnly: true,
                   focusedConversationId: focused,
                   unreadSource: "hub",
                 })
@@ -166,8 +166,8 @@ export function createConversationListActions(
             // Preserve previous hub-only shells when digest cache is still cold
             // on a quiet peek (ensureCloudDigestHydrated no-ops if already warm;
             // if empty, do not wipe rows that were painted by hard open).
-            const prevHubOnly =
-              hubMode && hubOnly.length === 0
+            const prevCloudOnly =
+              cloudMode && cloudOnly.length === 0
                 ? prev.filter(
                     (c) =>
                       !c.projectId &&
@@ -180,17 +180,17 @@ export function createConversationListActions(
             const others = prev.filter(
               (c) => c.projectId !== projectId && Boolean(c.projectId),
             );
-            const nextHubOnly = hubOnly.length > 0 ? hubOnly : prevHubOnly;
+            const nextCloudOnly = cloudOnly.length > 0 ? cloudOnly : prevCloudOnly;
             const conversations = reuseStableConversations(prev, [
               ...others,
               ...list,
-              ...nextHubOnly,
+              ...nextCloudOnly,
             ]);
             set((s) => ({
               conversations,
               // Hub mode: keep map for cold-start daemon-only fallback only;
               // rail unread never reads it while authenticated.
-              readMessageCountById: hubMode ? s.readMessageCountById : read,
+              readMessageCountById: cloudMode ? s.readMessageCountById : read,
               conversationsStatusByProject: {
                 ...s.conversationsStatusByProject,
                 [projectId]: { phase: "ready", generation },

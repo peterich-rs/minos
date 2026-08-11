@@ -17,7 +17,7 @@ use minos_backend::{
     auth::jwt,
     host_link::HostLinkService,
     http::{router, BackendState},
-    session::SessionRegistry,
+    realtime::RealtimeConnectionRegistry,
     store,
 };
 use minos_daemon::{DaemonHandle, RelayConfig};
@@ -80,7 +80,7 @@ async fn spawn_relay() -> anyhow::Result<Relay> {
     let pool = store::connect(&db_url).await?;
 
     let mut state = BackendState::new(
-        Arc::new(SessionRegistry::new()),
+        Arc::new(RealtimeConnectionRegistry::new()),
         Arc::new(HostLinkService::new(pool.clone())),
         pool.clone(),
         Duration::from_mins(5),

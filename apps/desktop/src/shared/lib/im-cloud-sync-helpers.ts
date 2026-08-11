@@ -24,7 +24,7 @@ export function displayNameForRuntime(runtime: string): string {
 }
 
 /**
- * Frozen agent-result id shape (IM reliability B4/C2):
+ * Frozen agent-result id shape:
  * `agent-result:{conversationId}:{sessionId}:{originMessageId}`
  *
  * All three segments after the prefix must be non-empty. Origin may itself
