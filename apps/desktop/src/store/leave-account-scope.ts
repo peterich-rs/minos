@@ -10,6 +10,7 @@
  */
 
 import { minosQueryClient } from "@/shared/api/queryClient";
+import { bumpAccountScopeGeneration } from "@/shared/lib/account-scope-generation";
 import { cloudDigestCache } from "@/shared/lib/cloud-digest-cache";
 import { clearAllTopicCursors } from "@/shared/lib/cloud-cursors";
 import { cancelCloudDigestHydrate } from "@/store/im/cloud-digest-ensure";
@@ -29,17 +30,10 @@ export type LeaveAccountScopeReason =
   | "account-switch"
   | "auth-invalid";
 
-/** Bumped on every leave so async writers can detect staleness. */
-let accountScopeGeneration = 0;
-
-export function getAccountScopeGeneration(): number {
-  return accountScopeGeneration;
-}
-
-export function bumpAccountScopeGeneration(): number {
-  accountScopeGeneration += 1;
-  return accountScopeGeneration;
-}
+export {
+  bumpAccountScopeGeneration,
+  getAccountScopeGeneration,
+} from "@/shared/lib/account-scope-generation";
 
 /**
  * Tear down every account-scoped process surface.
@@ -87,6 +81,9 @@ export function leaveAccountScope(
   useUiStore.getState().clearAccountScopedUi();
 
   // 5) Best-effort drop host hit_ so next account cannot inherit /ws/host.
+  // Fire-and-forget: leave must stay sync for store setState callers.
+  // Next login always force-registers when hostCredentialAccountId is null
+  // (account-store clears ownership on leave/sign-out/switch).
   if (isTauriRuntime()) {
     void daemonApi.hostClearCredential().catch(() => {
       /* daemon may be offline; ensure path force-registers on next login */

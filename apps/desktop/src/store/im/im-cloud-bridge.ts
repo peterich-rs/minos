@@ -35,6 +35,7 @@ import {
 } from "@/shared/lib/rail-activity";
 import { getCloudAuth } from "@/shared/lib/cloud-auth";
 import { useAccountStore } from "@/store/account-store";
+import { getAccountScopeGeneration } from "@/shared/lib/account-scope-generation";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import {
   applyHubMessage,
@@ -181,8 +182,10 @@ async function onCloudChatMessage(message: CloudChatMessage): Promise<void> {
     await onCloudChatMessageRecalled(message);
     return;
   }
+  const accountScopeGen = getAccountScopeGeneration();
   const ui = await mapCloudChatMessageToTimeline(message);
   if (!ui) return;
+  if (accountScopeGen !== getAccountScopeGeneration()) return;
 
   const ws = useWorkspaceStore.getState();
   const conversationId = message.conversationId;
@@ -198,14 +201,16 @@ async function onCloudChatMessage(message: CloudChatMessage): Promise<void> {
   // Open/focused window: apply body. Background: next open loadTimeline always
   // cold-pulls Hub (no separate dirty flag).
   if (focused || hasWindow) {
-    applyHubMessage(conversationId, ui);
+    applyHubMessage(conversationId, ui, { accountScopeGen });
   }
 
   // Live patch Hub digest + rail row (no per-project Hub re-query).
-  patchRailFromCloudMessage(message, { isRecall: false });
+  if (accountScopeGen === getAccountScopeGeneration()) {
+    patchRailFromCloudMessage(message, { isRecall: false });
+  }
 
   // Focused live inbound: debounce Hub mark-read (not only on open).
-  if (focused) {
+  if (focused && accountScopeGen === getAccountScopeGeneration()) {
     scheduleFocusedMarkRead(conversationId);
   }
 }
@@ -374,9 +379,12 @@ async function onCloudChatMessageRecalled(message: CloudChatMessage): Promise<vo
   const conversationId = message.conversationId;
   const messageId = message.messageId;
   if (!conversationId || !messageId) return;
+  const accountScopeGen = getAccountScopeGeneration();
 
-  removeRecalledMessage(conversationId, messageId);
-  patchRailFromCloudMessage(message, { isRecall: true });
+  removeRecalledMessage(conversationId, messageId, { accountScopeGen });
+  if (accountScopeGen === getAccountScopeGeneration()) {
+    patchRailFromCloudMessage(message, { isRecall: true });
+  }
 }
 
 function conversationIdFromTopic(topic: string): string | null {
@@ -422,6 +430,7 @@ async function onSnapshotRequired(topic: string): Promise<void> {
 async function reconcileConversationFromCloud(
   conversationId: string,
 ): Promise<void> {
+  const accountScopeGen = getAccountScopeGeneration();
   const prev =
     useWorkspaceStore.getState().messagesByConversation[conversationId] ?? [];
   const maxSeq = lastMessageSeq(prev);
@@ -502,6 +511,7 @@ async function reconcileConversationFromCloud(
   }
 
   // Quiet-tail union keeps previously loaded older pages across snapshot.
+  if (accountScopeGen !== getAccountScopeGeneration()) return;
   const cloudHasOlder =
     latestPage.nextBeforeSeq != null ||
     latestPage.rawCount >= MESSAGE_PAGE_SIZE;
@@ -512,6 +522,7 @@ async function reconcileConversationFromCloud(
       hasOlderCloud: cloudHasOlder,
       loadingOlder: false,
     },
+    accountScopeGen,
   });
 }
 

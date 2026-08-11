@@ -35,6 +35,7 @@ import {
   mergeCloudAndLocalTimeline,
 } from "@/shared/lib/cloud-timeline";
 import { useAccountStore } from "@/store/account-store";
+import { getAccountScopeGeneration } from "@/shared/lib/account-scope-generation";
 import {
   ensureTimelineWindowKey,
   replaceWindowFromHydrate,
@@ -70,16 +71,19 @@ export function createTimelineActions(
         // parity — see loadTranscript quiet path).
         const prev = get().timelineStatusByConversation[conversationId];
         const { next, generation } = statusForLoad(prev, quiet);
+        const accountScopeGen = getAccountScopeGeneration();
         // Quiet is stale when a hard open bumped generation past what we saw.
         // Hard open is stale when a newer hard open superseded us.
+        // Also stale after account leave/switch mid-flight.
         const isStale = () =>
           get().timelineStatusByConversation[conversationId]?.generation !==
-          generation;
+            generation ||
+          accountScopeGen !== getAccountScopeGeneration();
 
         // Ensure messages key exists so Hub WS hasWindow during cold pull.
         // focused ≠ hasWindow: hydrate-only — no focusedConversationId, no
         // mark-read (open path + debounced focused inbound own those).
-        ensureTimelineWindowKey(conversationId);
+        ensureTimelineWindowKey(conversationId, { accountScopeGen });
         set((s) => ({
           timelineStatusByConversation: {
             ...s.timelineStatusByConversation,
@@ -186,7 +190,7 @@ export function createTimelineActions(
                   hasMoreHost: hostHasOlder || trimmed.trimmed,
                 },
               );
-          setTimelineWindow(conversationId, merged, nextHist);
+          setTimelineWindow(conversationId, merged, nextHist, { accountScopeGen });
           set((s) => ({
             timelineStatusByConversation: {
               ...s.timelineStatusByConversation,
@@ -227,7 +231,8 @@ export function createTimelineActions(
                 mode: "hub-local",
                 cloudMessages: page.messages,
                 localMessages: [...localUi, ...prev],
-              });
+                accountScopeGen,
+            });
             });
           }
         } catch (e) {
@@ -266,6 +271,7 @@ export function createTimelineActions(
 
   loadOlderMessages: async (conversationId) => {
     if (get().source !== "daemon" || !conversationId) return;
+    const accountScopeGen = getAccountScopeGeneration();
     const hist =
       get().messageHistoryByConversation[conversationId] ??
       EMPTY_MESSAGE_HISTORY;
@@ -334,6 +340,7 @@ export function createTimelineActions(
         cloudPagePromise,
       ]);
       if (get().source !== "daemon") return;
+      if (accountScopeGen !== getAccountScopeGeneration()) return;
       useReactionStore
         .getState()
         .hydrateFromMessages(
@@ -355,6 +362,7 @@ export function createTimelineActions(
           hasOlderHost: page.hasMore,
           loadingOlder: false,
         },
+        accountScopeGen,
       });
     } catch {
       set((s) => {

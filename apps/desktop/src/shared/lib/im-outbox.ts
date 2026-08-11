@@ -659,7 +659,15 @@ export async function markFailed(
   });
 }
 
-export async function reclaimStaleInflight(now = nowMs()): Promise<number> {
+/**
+ * Reclaim stale inflight → pending.
+ * When `accountId` is non-empty, only that account's rows are reclaimed
+ * (account leave / worker must not touch foreign outbox ownership).
+ */
+export async function reclaimStaleInflight(
+  now = nowMs(),
+  accountId = "",
+): Promise<number> {
   return withMutation(async () => {
     const cutoff = now - STALE_INFLIGHT_MS;
     let n = 0;
@@ -667,6 +675,7 @@ export async function reclaimStaleInflight(now = nowMs()): Promise<number> {
     for (const e of entries) {
       if (e.status !== "inflight") continue;
       if (e.updatedAtMs >= cutoff) continue;
+      if (accountId && !ownedByAccount(e, accountId)) continue;
       e.status = "pending";
       e.nextAttemptAt = now;
       e.updatedAtMs = now;
@@ -685,7 +694,7 @@ export async function listDuePending(
   now = nowMs(),
   accountId = "",
 ): Promise<ImOutboxEntry[]> {
-  await reclaimStaleInflight(now);
+  await reclaimStaleInflight(now, accountId);
   return entries.filter(
     (e) =>
       e.status === "pending" &&
@@ -708,7 +717,7 @@ export async function listDuePendingLanes(
   now = nowMs(),
   accountId = "",
 ): Promise<ImOutboxEntry[][]> {
-  await reclaimStaleInflight(now);
+  await reclaimStaleInflight(now, accountId);
   const byLane = new Map<string, ImOutboxEntry[]>();
   for (const e of entries) {
     if (e.status !== "pending" && e.status !== "inflight") continue;
@@ -741,7 +750,7 @@ export async function earliestPendingAttemptAt(
   now = nowMs(),
   accountId = "",
 ): Promise<number | null> {
-  await reclaimStaleInflight(now);
+  await reclaimStaleInflight(now, accountId);
   let min: number | null = null;
   for (const e of entries) {
     if (e.status !== "pending") continue;

@@ -158,6 +158,32 @@ describe("im-outbox", () => {
     assert.equal((await listDuePending(undefined, TEST_ACCOUNT))[0]!.clientMessageId, "m-stale");
   });
 
+  it("reclaimStaleInflight scopes by accountId when provided", async () => {
+    await enqueueUserMessage({
+      accountId: "acct-a",
+      conversationId: "c1",
+      clientMessageId: "m-a",
+      text: "a",
+    });
+    await enqueueUserMessage({
+      accountId: "acct-b",
+      conversationId: "c1",
+      clientMessageId: "m-b",
+      text: "b",
+    });
+    await markInflight("m-a");
+    await markInflight("m-b");
+    const old = Date.now() - STALE_INFLIGHT_MS - 1_000;
+    await forceUpdatedAtForTests("m-a", old);
+    await forceUpdatedAtForTests("m-b", old);
+
+    const reclaimed = await reclaimStaleInflight(Date.now(), "acct-a");
+    assert.equal(reclaimed, 1);
+    const snap = await getOutboxSnapshotForTests();
+    assert.equal(snap.find((e) => e.clientMessageId === "m-a")!.status, "pending");
+    assert.equal(snap.find((e) => e.clientMessageId === "m-b")!.status, "inflight");
+  });
+
   it("listDuePending includes reclaim of stale inflight inline", async () => {
     await enqueueUserMessage({
       accountId: TEST_ACCOUNT,

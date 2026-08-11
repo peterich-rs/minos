@@ -19,6 +19,7 @@ import {
   trimMessagesHardMax,
   type MessageHistoryMeta,
 } from "@/shared/lib/message-history";
+import { getAccountScopeGeneration } from "@/shared/lib/account-scope-generation";
 import { useWorkspaceStore } from "@/store/workspace-store";
 
 export type TimelineHistoryPatch = {
@@ -27,14 +28,26 @@ export type TimelineHistoryPatch = {
   loadingOlder?: boolean;
 };
 
+/**
+ * Drop account-scoped timeline writes after leave/account-switch.
+ * Capture gen at async start; funnel re-checks at setState time.
+ */
+function isStaleAccountScope(expectedGen?: number): boolean {
+  if (expectedGen == null) return false;
+  return expectedGen !== getAccountScopeGeneration();
+}
+
 /** Ensure a conversation window key exists (empty) without clobbering body. */
-export function ensureTimelineWindowKey(conversationId: string): void {
+export function ensureTimelineWindowKey(
+  conversationId: string,
+  opts?: { accountScopeGen?: number },
+): void {
   const id = conversationId.trim();
   if (!id) return;
+  if (isStaleAccountScope(opts?.accountScopeGen)) return;
   useWorkspaceStore.setState((s) => {
-    if (
-      Object.prototype.hasOwnProperty.call(s.messagesByConversation, id)
-    ) {
+    if (isStaleAccountScope(opts?.accountScopeGen)) return {};
+    if (Object.prototype.hasOwnProperty.call(s.messagesByConversation, id)) {
       return {};
     }
     return {
@@ -50,10 +63,13 @@ export function ensureTimelineWindowKey(conversationId: string): void {
 export function applyHubMessage(
   conversationId: string,
   message: TimelineMessage,
+  opts?: { accountScopeGen?: number },
 ): void {
   const id = conversationId.trim();
   if (!id || !message.id) return;
+  if (isStaleAccountScope(opts?.accountScopeGen)) return;
   useWorkspaceStore.setState((s) => {
+    if (isStaleAccountScope(opts?.accountScopeGen)) return {};
     const prev = s.messagesByConversation[id] ?? [];
     const merged = upsertCloudMessageIntoTimeline(prev, message);
     const trimmed = trimMessagesHardMax(merged);
@@ -81,15 +97,16 @@ export function applyHubMessage(
 export function removeRecalledMessage(
   conversationId: string,
   messageId: string,
+  opts?: { accountScopeGen?: number },
 ): boolean {
   const id = conversationId.trim();
   const mid = messageId.trim();
   if (!id || !mid) return false;
+  if (isStaleAccountScope(opts?.accountScopeGen)) return false;
   let changed = false;
   useWorkspaceStore.setState((s) => {
-    if (
-      !Object.prototype.hasOwnProperty.call(s.messagesByConversation, id)
-    ) {
+    if (isStaleAccountScope(opts?.accountScopeGen)) return {};
+    if (!Object.prototype.hasOwnProperty.call(s.messagesByConversation, id)) {
       return {};
     }
     const prev = s.messagesByConversation[id] ?? [];
@@ -124,11 +141,14 @@ export function replaceWindowFromHydrate(
       /** Full history row override after merge (loadTimeline ready path). */
       nextHistory?: MessageHistoryMeta;
     };
+    accountScopeGen?: number;
   },
 ): void {
   const id = conversationId.trim();
   if (!id) return;
+  if (isStaleAccountScope(input.accountScopeGen)) return;
   useWorkspaceStore.setState((s) => {
+    if (isStaleAccountScope(input.accountScopeGen)) return {};
     const prev = s.messagesByConversation[id] ?? [];
     const cloud = input.cloudMessages ?? [];
     const local = input.localMessages ?? [];
@@ -194,35 +214,45 @@ export function setTimelineWindow(
   conversationId: string,
   messages: TimelineMessage[],
   history: MessageHistoryMeta,
+  opts?: { accountScopeGen?: number },
 ): void {
   const id = conversationId.trim();
   if (!id) return;
-  useWorkspaceStore.setState((s) => ({
-    messagesByConversation: {
-      ...s.messagesByConversation,
-      [id]: messages,
-    },
-    messageHistoryByConversation: {
-      ...s.messageHistoryByConversation,
-      [id]: history,
-    },
-  }));
+  if (isStaleAccountScope(opts?.accountScopeGen)) return;
+  useWorkspaceStore.setState((s) => {
+    if (isStaleAccountScope(opts?.accountScopeGen)) return {};
+    return {
+      messagesByConversation: {
+        ...s.messagesByConversation,
+        [id]: messages,
+      },
+      messageHistoryByConversation: {
+        ...s.messageHistoryByConversation,
+        [id]: history,
+      },
+    };
+  });
 }
 
 /** Append optimistic user bubble (send path). */
 export function applyOptimisticUserMessage(
   conversationId: string,
   message: TimelineMessage,
+  opts?: { accountScopeGen?: number },
 ): void {
   const id = conversationId.trim();
   if (!id || !message.id) return;
-  useWorkspaceStore.setState((s) => ({
-    messagesByConversation: {
-      ...s.messagesByConversation,
-      [id]: [...(s.messagesByConversation[id] ?? []), message],
-    },
-    error: null,
-  }));
+  if (isStaleAccountScope(opts?.accountScopeGen)) return;
+  useWorkspaceStore.setState((s) => {
+    if (isStaleAccountScope(opts?.accountScopeGen)) return {};
+    return {
+      messagesByConversation: {
+        ...s.messagesByConversation,
+        [id]: [...(s.messagesByConversation[id] ?? []), message],
+      },
+      error: null,
+    };
+  });
 }
 
 /** Patch delivery / clock fields on one message by id. */
@@ -235,10 +265,12 @@ export function patchMessageDelivery(
       "deliveryStatus" | "messageSeq" | "time" | "createdAtMs"
     >
   >,
+  opts?: { accountScopeGen?: number },
 ): void {
   const id = conversationId.trim();
   const mid = messageId.trim();
   if (!id || !mid) return;
+  if (isStaleAccountScope(opts?.accountScopeGen)) return;
   // Drop undefined keys so partial patches do not clobber existing fields.
   const clean: Partial<TimelineMessage> = {};
   if (patch.deliveryStatus !== undefined) {
@@ -248,12 +280,15 @@ export function patchMessageDelivery(
   if (patch.time !== undefined) clean.time = patch.time;
   if (patch.createdAtMs !== undefined) clean.createdAtMs = patch.createdAtMs;
   if (Object.keys(clean).length === 0) return;
-  useWorkspaceStore.setState((s) => ({
-    messagesByConversation: {
-      ...s.messagesByConversation,
-      [id]: (s.messagesByConversation[id] ?? []).map((m) =>
-        m.id === mid ? { ...m, ...clean } : m,
-      ),
-    },
-  }));
+  useWorkspaceStore.setState((s) => {
+    if (isStaleAccountScope(opts?.accountScopeGen)) return {};
+    return {
+      messagesByConversation: {
+        ...s.messagesByConversation,
+        [id]: (s.messagesByConversation[id] ?? []).map((m) =>
+          m.id === mid ? { ...m, ...clean } : m,
+        ),
+      },
+    };
+  });
 }

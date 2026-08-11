@@ -633,9 +633,12 @@ export async function syncApprovalResolve(input: {
   });
 }
 
+export { deliveryStatusAfterUserSettlement } from "@/shared/lib/user-message-settlement";
+
 /**
  * Enqueue a user timeline message then drain via per-conversation message lane.
  * Surfaces toast on terminal failure (multi-end intent must not silent-succeed).
+ * Resolves only when outbox is acked — never treats timeout as success.
  */
 export async function syncUserMessageToCloud(input: {
   conversationId: string;
@@ -655,10 +658,14 @@ export async function syncUserMessageToCloud(input: {
   mentions?: ImOutboxEntry["mentions"];
 }): Promise<CloudUserMessageAck | null> {
   const auth = cloudAuth();
-  if (!auth) return null;
+  if (!auth) {
+    throw new Error("not authenticated");
+  }
   const text = input.text.trim();
   const messageId = input.messageId.trim();
-  if (!text || !input.conversationId.trim() || !messageId) return null;
+  if (!text || !input.conversationId.trim() || !messageId) {
+    throw new Error("invalid user message for cloud sync");
+  }
   if (await isAcked(messageId)) {
     return userMessageAcks.get(messageId) ?? null;
   }
@@ -676,7 +683,16 @@ export async function syncUserMessageToCloud(input: {
     mentions: input.mentions,
   });
 
-  await waitForOutboxSettlement(messageId, { throwOnTerminal: true });
+  const settlement = await waitForOutboxSettlement(messageId, {
+    throwOnTerminal: true,
+  });
+  if (settlement !== "acked") {
+    // timeout (failed_terminal already throws when throwOnTerminal)
+    throw new Error(
+      "Cloud sync timed out — message still pending delivery to other devices",
+    );
+  }
+  // Acked may lack ChatSendAck payload (seq) — still durable success.
   return userMessageAcks.get(messageId) ?? null;
 }
 
@@ -823,6 +839,9 @@ async function waitForOutboxSettlement(
     scheduleOutboxWorker();
   }
   if (await isAcked(id)) return "acked";
+  if (opts?.throwOnTerminal) {
+    throw new Error("outbox settlement timeout");
+  }
   return "timeout";
 }
 
@@ -989,7 +1008,8 @@ export function startImOutboxWorker(): void {
   void (async () => {
     await initImOutbox();
     if (gen !== outboxWorkerGeneration) return;
-    await reclaimStaleInflight();
+    const accountId = currentOutboxAccountId();
+    await reclaimStaleInflight(Date.now(), accountId);
     if (gen !== outboxWorkerGeneration) return;
     await flushImOutbox();
     if (gen !== outboxWorkerGeneration) return;
@@ -1012,9 +1032,4 @@ export function resetImCloudSyncState(): void {
   reactionResults.clear();
   userMessageAcks.clear();
   laneChains.clear();
-}
-
-/** @deprecated Use resetImCloudSyncState */
-export function resetImCloudSyncStateForTests(): void {
-  resetImCloudSyncState();
 }

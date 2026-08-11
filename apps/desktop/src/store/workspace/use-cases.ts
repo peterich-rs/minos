@@ -24,6 +24,7 @@ import { positiveMs } from "@/shared/lib/rail-activity";
 import { useAccountStore } from "@/store/account-store";
 import type { Conversation } from "@/shared/domain/collaboration";
 import { membershipTokensOfBots } from "@/shared/domain/collaboration";
+import { getAccountScopeGeneration } from "@/shared/lib/account-scope-generation";
 import {
   applyOptimisticUserMessage,
   patchMessageDelivery,
@@ -109,10 +110,18 @@ async function deliverMessage(
     replyToMessageId?: string;
     createdAtMs: number;
     clock: string;
+    accountScopeGen: number;
   },
 ): Promise<void> {
-  const { conversationId, messageId, messageBody, replyToMessageId, createdAtMs, clock } =
-    input;
+  const {
+    conversationId,
+    messageId,
+    messageBody,
+    replyToMessageId,
+    createdAtMs,
+    clock,
+    accountScopeGen,
+  } = input;
   const conv = get().conversations.find((c) => c.id === conversationId);
   const project = get().projects.find((p) => p.id === conv?.projectId);
   if (!conv || !project) {
@@ -124,6 +133,9 @@ async function deliverMessage(
     conv.participatingAgents,
     conv.participatingBots,
   );
+  if (accountScopeGen !== getAccountScopeGeneration()) {
+    throw new Error("account scope changed");
+  }
   const installedAgents = new Set(
     get()
       .clis.filter((c) => c.installed)
@@ -156,14 +168,23 @@ async function deliverMessage(
     messageSource: "client_live",
     mentions: structuredMentions.length > 0 ? structuredMentions : undefined,
   });
-  patchMessageDelivery(conversationId, messageId, {
-    deliveryStatus: "sent",
-    ...(cloudAck?.messageSeq != null
-      ? { messageSeq: cloudAck.messageSeq }
-      : {}),
-    time: clock,
-    createdAtMs,
-  });
+  // Only acked settlement reaches here (sync throws on timeout/terminal).
+  if (accountScopeGen !== getAccountScopeGeneration()) {
+    throw new Error("account scope changed");
+  }
+  patchMessageDelivery(
+    conversationId,
+    messageId,
+    {
+      deliveryStatus: "sent",
+      ...(cloudAck?.messageSeq != null
+        ? { messageSeq: cloudAck.messageSeq }
+        : {}),
+      time: clock,
+      createdAtMs,
+    },
+    { accountScopeGen },
+  );
   patchRailActivity(
     set,
     conversationId,
@@ -178,10 +199,12 @@ async function deliverMessage(
       localErr,
     );
   }
+  if (accountScopeGen !== getAccountScopeGeneration()) return;
   set({ actionError: null });
   void get().loadTimeline(conversationId, { quiet: true });
 
   await quietRefreshConversationSlices(get, conversationId);
+  if (accountScopeGen !== getAccountScopeGeneration()) return;
   await minosQueryClient.invalidateQueries({
     queryKey: queryKeys.conversations(conv.projectId),
   });
@@ -552,6 +575,7 @@ export function createUseCasesActions(
     // Constraint #1: generate messageId + optimistic `sending` insert BEFORE
     // any business validation that may throw, so the user always sees their
     // bubble immediately (WeChat: empty composer + sending row).
+    const accountScopeGen = getAccountScopeGeneration();
     const resolvedId = messageId ?? `msg_${crypto.randomUUID()}`;
     const replyToMessageId = options?.replyToMessageId;
     const createdAtMs = Date.now();
@@ -567,7 +591,9 @@ export function createUseCasesActions(
       // yet accept reply_to — durable round-trip deferred to protocol wave.
       ...(replyToMessageId ? { replyToMessageId } : {}),
     };
-    applyOptimisticUserMessage(conversationId, optimistic);
+    applyOptimisticUserMessage(conversationId, optimistic, {
+      accountScopeGen,
+    });
     patchRailActivity(
       set,
       conversationId,
@@ -576,10 +602,15 @@ export function createUseCasesActions(
     );
 
     if (get().source !== "daemon") {
-      patchMessageDelivery(conversationId, resolvedId, {
-        deliveryStatus: "sent",
-        time: clock,
-      });
+      patchMessageDelivery(
+        conversationId,
+        resolvedId,
+        {
+          deliveryStatus: "sent",
+          time: clock,
+        },
+        { accountScopeGen },
+      );
       return;
     }
 
@@ -591,18 +622,29 @@ export function createUseCasesActions(
         replyToMessageId,
         createdAtMs,
         clock,
+        accountScopeGen,
       });
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
+      if (accountScopeGen !== getAccountScopeGeneration()) {
+        throw e;
+      }
       set({ actionError: message });
       const stillSending =
         (get().messagesByConversation[conversationId] ?? []).find(
           (m) => m.id === resolvedId,
         )?.deliveryStatus === "sending";
-      if (stillSending) {
-        patchMessageDelivery(conversationId, resolvedId, {
-          deliveryStatus: "failed",
-        });
+      // Timeout keeps `sending` (outbox still pending). Terminal / other
+      // failures mark failed. Never false-sent.
+      const isTimeout =
+        /timeout|timed out|pending delivery/i.test(message);
+      if (stillSending && !isTimeout) {
+        patchMessageDelivery(
+          conversationId,
+          resolvedId,
+          { deliveryStatus: "failed" },
+          { accountScopeGen },
+        );
       }
       await quietRefreshConversationSlices(get, conversationId);
       throw e;
@@ -612,6 +654,7 @@ export function createUseCasesActions(
   retryFailedMessage: async (conversationId, messageId) => {
     // Constraint #2: never insert a new optimistic row on retry. Reuse
     // message_id (store append is idempotent) and patch delivery in place.
+    const accountScopeGen = getAccountScopeGeneration();
     const list = get().messagesByConversation[conversationId] ?? [];
     const failed = list.find((m) => m.id === messageId);
     if (!failed) throw new Error("message not found");
@@ -624,14 +667,20 @@ export function createUseCasesActions(
     const retryClock =
       formatLocalClock(retryAt) || formatLocalClock(Date.now());
 
-    patchMessageDelivery(conversationId, messageId, {
-      deliveryStatus: "sending",
-    });
+    patchMessageDelivery(
+      conversationId,
+      messageId,
+      { deliveryStatus: "sending" },
+      { accountScopeGen },
+    );
 
     if (get().source !== "daemon") {
-      patchMessageDelivery(conversationId, messageId, {
-        deliveryStatus: "sent",
-      });
+      patchMessageDelivery(
+        conversationId,
+        messageId,
+        { deliveryStatus: "sent" },
+        { accountScopeGen },
+      );
       return;
     }
 
@@ -643,18 +692,27 @@ export function createUseCasesActions(
         replyToMessageId,
         createdAtMs: retryAt,
         clock: retryClock,
+        accountScopeGen,
       });
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
+      if (accountScopeGen !== getAccountScopeGeneration()) {
+        throw e;
+      }
       set({ actionError: message });
       const stillSending =
         (get().messagesByConversation[conversationId] ?? []).find(
           (m) => m.id === messageId,
         )?.deliveryStatus === "sending";
-      if (stillSending) {
-        patchMessageDelivery(conversationId, messageId, {
-          deliveryStatus: "failed",
-        });
+      const isTimeout =
+        /timeout|timed out|pending delivery/i.test(message);
+      if (stillSending && !isTimeout) {
+        patchMessageDelivery(
+          conversationId,
+          messageId,
+          { deliveryStatus: "failed" },
+          { accountScopeGen },
+        );
       }
       await quietRefreshConversationSlices(get, conversationId);
       throw e;

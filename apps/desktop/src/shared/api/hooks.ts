@@ -60,28 +60,6 @@ export function useModelsQuery(runtime: string | null | undefined) {
   });
 }
 
-/** Project-scoped agent session index (Sessions tab left rail). */
-export function useProjectSessionsQuery(projectId: string) {
-  const enabled = useDaemonEnabled() && Boolean(projectId);
-  const bootEpoch = useWorkspaceStore((s) => s.bootEpoch);
-  return useQuery({
-    queryKey: [...queryKeys.projectSessions(projectId), bootEpoch],
-    queryFn: () => daemonApi.listProjectSessions(projectId),
-    enabled,
-  });
-}
-
-/** Conversation-scoped session index (Inspector). */
-export function useInspectorSessionsQuery(conversationId: string) {
-  const enabled = useDaemonEnabled() && Boolean(conversationId);
-  const bootEpoch = useWorkspaceStore((s) => s.bootEpoch);
-  return useQuery({
-    queryKey: [...queryKeys.inspectorSessions(conversationId), bootEpoch],
-    queryFn: () => daemonApi.listSessions(conversationId),
-    enabled,
-  });
-}
-
 /** Invalidate catalog caches after mutations or reconnect. */
 export function invalidateCatalogQueries(opts?: {
   projectId?: string;

@@ -6,7 +6,7 @@ import {
   groupSessionsByConversation,
   sessionIsExecuting,
 } from "./session-list-group.ts";
-import type { ProjectSession } from "../../store/workspace-store.ts";
+import type { ProjectSession } from "../domain/collaboration.ts";
 
 function sess(
   partial: Partial<ProjectSession> &
