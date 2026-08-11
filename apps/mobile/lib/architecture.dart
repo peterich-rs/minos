@@ -3,6 +3,11 @@
 /// This application follows the recommended Flutter layered architecture
 /// (UI → Application → Data → Domain) with strict separation of concerns.
 ///
+/// Product spine: **conversation-first collaboration IM**. The shell is
+/// Messages / Hosts / Account. Agent session transcript and project/session
+/// product surfaces were removed from Mobile; bots participate via Hub
+/// conversation membership and bubbles.
+///
 /// ## Layer Diagram
 ///
 /// ```
@@ -12,33 +17,30 @@
 /// │  └── features/           Feature-grouped views          │
 /// │       ├── auth/          Login / register               │
 /// │       ├── messages/      Conversation inbox (primary)   │
-/// │       ├── sessions/      Agent session list (secondary) │
-/// │       ├── chat/          Agent session chat              │
-/// │       ├── projects/      Project CRUD + sessions         │
-/// │       ├── agents/        Agent profile management       │
 /// │       ├── social/        Conversation chat / members    │
+/// │       ├── hosts/         Linked hosts list              │
+/// │       ├── account/       Profile / logout               │
 /// │       ├── debug/         Log viewer & traces            │
 /// │       └── shell/         Root navigation shell          │
 /// ├─────────────────────────────────────────────────────────┤
 /// │  Application Layer (lib/application/)                   │
 /// │  Riverpod providers acting as ViewModels:               │
 /// │  ├── auth_provider         Auth state machine           │
-/// │  ├── active_session_provider  Agent session lifecycle   │
-/// │  ├── thread_events_provider   Live event stream         │
-/// │  ├── minos_providers      Pairing / runtime state       │
-/// │  ├── project_providers     Project CRUD + selection     │
-/// │  ├── social_providers      Chat, friends, conversations │
-/// │  ├── agent_profiles_provider  Profile CRUD              │
-/// │  ├── *_actions            User-triggered mutations      │
+/// │  ├── minos_providers       Connection / hosts / presence│
+/// │  ├── social_providers      Timeline + inbox + friends   │
+/// │  ├── im_outbox_worker      Local IM outbox drain        │
+/// │  ├── agent_profiles_provider  Local bot cache for compose│
+/// │  ├── group_agent_provider  Conversation participants    │
+/// │  ├── *_actions              User-triggered mutations    │
 /// │  └── root_route_decision   Navigation logic             │
 /// ├─────────────────────────────────────────────────────────┤
 /// │  Data Layer (lib/data/ + lib/infrastructure/)           │
 /// │  ├── repositories/       Single source of truth         │
 /// │  │   ├── auth_repository     Auth / session IO          │
 /// │  │   ├── runtime_repository  Pairing / host state       │
-/// │  │   ├── project_repository  Project + session list      │
-/// │  │   ├── thread_repository   Thread event / send IO     │
+/// │  │   ├── hosts_repository    Linked hosts HTTP          │
 /// │  │   ├── social_repository   Social remote + cache      │
+/// │  │   ├── thread_repository   uiEvents + residual APIs   │
 /// │  │   ├── agent_profile_repository  Device cache of bots │
 /// │  │   └── group_agent_repository  Conversation agents    │
 /// │  ├── services/           Service providers / wrappers   │
@@ -49,18 +51,18 @@
 /// │       ├── minos_core       Rust FFI bridge (Hub CRUD)   │
 /// │       ├── secure_pairing_store  Keychain persistence    │
 /// │       ├── social_cache_store    SQLite message cache    │
+/// │       ├── im_outbox_store       Outbox policy helpers   │
 /// │       └── agent_profile_store   Local bot draft cache   │
 /// ├─────────────────────────────────────────────────────────┤
 /// │  Domain Layer (lib/domain/)                             │
 /// │  ├── minos_core_protocol   Abstract service contract    │
-/// │  ├── active_session        Session state machine        │
 /// │  ├── auth_state            Auth lifecycle states        │
 /// │  ├── agent_profile         Bot body draft / cache model │
 /// │  ├── social_message        Chat message model           │
 /// │  ├── group_member          Group membership model       │
 /// │  └── minos_error_display   Error presentation helpers   │
 /// │  Note: Hub `agents` is bot identity SSOT; local JSON is │
-/// │  cache/draft only (Hub `agents` is identity SSOT).     │
+/// │  cache/draft only.                                     │
 /// └─────────────────────────────────────────────────────────┘
 /// ```
 ///
@@ -79,10 +81,15 @@
 ///    feature widgets and references its view-model providers. Shared
 ///    widgets live in `ui/core/widgets/`.
 ///
-/// 4. **Immutable domain models**: `ActiveSession`, `AuthState`,
-///    `SocialChatMessage`, `AgentProfile` are all immutable value types.
+/// 4. **Immutable domain models**: `AuthState`, `SocialChatMessage`,
+///    `AgentProfile` are immutable value types.
 ///
 /// 5. **Single source of truth**: Each piece of data has exactly one
-///    authoritative provider. E.g. `projectListProvider` is the single
-///    source for the project list; UI reads it, never fetches directly.
+///    authoritative provider. E.g. `conversationsProvider` is the single
+///    source for the inbox list; UI reads it, never fetches directly.
+///
+/// 6. **IM send path**: Collaboration messages go through
+///    `SocialConversation.sendMessage` → local outbox →
+///    `sendChatMessage` (Account WS AppendMessage). No second product
+///    send path on Mobile.
 library;

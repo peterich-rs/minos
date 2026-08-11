@@ -3,7 +3,6 @@ import 'dart:convert';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart' show StateProvider;
-import 'package:minos/application/agent_activity_provider.dart';
 import 'package:minos/application/conversations_sort.dart';
 import 'package:minos/application/flutter_log.dart';
 import 'package:minos/application/group_agent_provider.dart';
@@ -82,25 +81,6 @@ final imSnapshotSyncProvider = Provider<void>((ref) {
 final socialProfileProvider = FutureProvider<MyProfileResponse>((ref) {
   return ref.watch(socialRepositoryProvider).myProfile();
 });
-
-@riverpod
-class SocialSearchQuery extends _$SocialSearchQuery {
-  @override
-  String build() {
-    return '';
-  }
-
-  void update(String value) {
-    state = value.trim();
-  }
-}
-
-final socialSearchProvider = FutureProvider.family
-    .autoDispose<List<UserSummary>, String>((ref, query) async {
-      final trimmed = query.trim();
-      if (trimmed.isEmpty) return const <UserSummary>[];
-      return ref.watch(socialRepositoryProvider).searchUsers(minosId: trimmed);
-    });
 
 /// Human members derived from unified participants (ADR 0021).
 final conversationMembersProvider = FutureProvider.family
@@ -568,7 +548,6 @@ class SocialConversation extends _$SocialConversation {
       );
       // Mark-read after state has observed maxLoadedSeq (not before).
       unawaited(_markConversationReadNow());
-      ref.invalidate(conversationAgentSessionsProvider(_conversationId));
       unawaited(
         ref
             .read(conversationsProvider.notifier)
@@ -740,7 +719,6 @@ class SocialConversation extends _$SocialConversation {
     final messages = await repository.loadMessages(_conversationId);
     state = state.withMessages(messages).copyWith(error: null);
     _scheduleMarkRead();
-    ref.invalidate(conversationAgentSessionsProvider(_conversationId));
     // Inbox patch: focused → unread 0, no full REST.
     unawaited(
       ref
@@ -823,25 +801,6 @@ class SocialConversation extends _$SocialConversation {
   }
 }
 
-final friendRequestsProvider =
-    AsyncNotifierProvider<FriendRequestsController, FriendRequestsResponse>(
-      FriendRequestsController.new,
-    );
-
-class FriendRequestsController extends AsyncNotifier<FriendRequestsResponse> {
-  @override
-  Future<FriendRequestsResponse> build() {
-    ref.watch(friendRequestRealtimeSyncProvider);
-    return ref.watch(socialRepositoryProvider).friendRequests();
-  }
-
-  Future<void> refresh() async {
-    state = AsyncValue.data(
-      await ref.read(socialRepositoryProvider).friendRequests(),
-    );
-  }
-}
-
 final friendsProvider =
     AsyncNotifierProvider<FriendsController, FriendsResponse>(
       FriendsController.new,
@@ -859,14 +818,14 @@ class FriendsController extends AsyncNotifier<FriendsResponse> {
   }
 }
 
-/// T2 FriendRequestUpdated durable → refresh friend / request lists (HTTP).
+/// T2 FriendRequestUpdated durable → refresh friend list (HTTP).
+/// Also surfaces subscription_limit_exceeded for shell notice (R4).
 final friendRequestRealtimeSyncProvider = Provider<void>((ref) {
   final repo = ref.watch(threadRepositoryProvider);
   final sub = repo.uiEvents.listen((frame) {
     final ui = frame.ui;
     if (ui is! UiEventMessage_Raw) return;
     if (ui.kind == 'friend_request_updated') {
-      unawaited(ref.read(friendRequestsProvider.notifier).refresh());
       unawaited(ref.read(friendsProvider.notifier).refresh());
       return;
     }

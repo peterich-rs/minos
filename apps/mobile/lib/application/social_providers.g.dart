@@ -9,58 +9,6 @@ part of 'social_providers.dart';
 // GENERATED CODE - DO NOT MODIFY BY HAND
 // ignore_for_file: type=lint, type=warning
 
-@ProviderFor(SocialSearchQuery)
-final socialSearchQueryProvider = SocialSearchQueryProvider._();
-
-final class SocialSearchQueryProvider
-    extends $NotifierProvider<SocialSearchQuery, String> {
-  SocialSearchQueryProvider._()
-    : super(
-        from: null,
-        argument: null,
-        retry: null,
-        name: r'socialSearchQueryProvider',
-        isAutoDispose: true,
-        dependencies: null,
-        $allTransitiveDependencies: null,
-      );
-
-  @override
-  String debugGetCreateSourceHash() => _$socialSearchQueryHash();
-
-  @$internal
-  @override
-  SocialSearchQuery create() => SocialSearchQuery();
-
-  /// {@macro riverpod.override_with_value}
-  Override overrideWithValue(String value) {
-    return $ProviderOverride(
-      origin: this,
-      providerOverride: $SyncValueProvider<String>(value),
-    );
-  }
-}
-
-String _$socialSearchQueryHash() => r'8d3b2514681408de97b829d3eb39924c580818ac';
-
-abstract class _$SocialSearchQuery extends $Notifier<String> {
-  String build();
-  @$mustCallSuper
-  @override
-  void runBuild() {
-    final ref = this.ref as $Ref<String, String>;
-    final element =
-        ref.element
-            as $ClassProviderElement<
-              AnyNotifier<String, String>,
-              String,
-              Object?,
-              Object?
-            >;
-    element.handleCreate(ref, build);
-  }
-}
-
 @ProviderFor(SocialReplyDraft)
 final socialReplyDraftProvider = SocialReplyDraftFamily._();
 
@@ -208,7 +156,7 @@ final class SocialConversationProvider
 }
 
 String _$socialConversationHash() =>
-    r'b8970b659094be55b1a598533b55dc2d7e17c02d';
+    r'875571911e9dcdcbed00d97cbfc8d6ba60755dd5';
 
 final class SocialConversationFamily extends $Family
     with

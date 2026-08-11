@@ -3,28 +3,18 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:minos/application/auth_provider.dart';
 import 'package:minos/application/root_route_decision.dart';
-import 'package:minos/src/rust/api/minos.dart' show AgentName, ConversationKind;
-import 'package:minos/ui/features/agents/views/agent_start_page.dart';
-import 'package:minos/ui/features/agents/views/agents_hub_page.dart';
+import 'package:minos/src/rust/api/minos.dart' show ConversationKind;
 import 'package:minos/ui/features/auth/views/login_page.dart';
-import 'package:minos/ui/features/chat/views/thread_view_page.dart';
 import 'package:minos/ui/features/debug/views/log_viewer_page.dart';
-import 'package:minos/ui/features/projects/views/project_detail_page.dart';
-import 'package:minos/ui/features/sessions/views/sessions_page.dart';
 import 'package:minos/ui/features/shell/views/app_shell_page.dart';
 import 'package:minos/ui/features/social/views/group_members_page.dart';
 import 'package:minos/ui/features/social/views/social_chat_page.dart';
 
-/// Route path constants for the app.
+/// Route path constants for the IM-first app shell.
 abstract final class AppRoutes {
   static const String splash = '/splash';
   static const String login = '/login';
   static const String shell = '/';
-  static const String sessions = '/sessions';
-  static const String thread = '/thread/:sessionId';
-  static const String newThread = '/thread/new';
-  static const String agentStart = '/agent-start';
-  static const String agentProfile = '/agent-profile/:profileId';
   static const String logViewer = '/log-viewer';
   static const String socialHub = '/social';
   static const String socialChat = '/social/chat/:conversationId';
@@ -80,53 +70,8 @@ GoRouter createAppRouter(Ref ref) {
         builder: (context, state) => const AppShellPage(),
       ),
       GoRoute(
-        path: AppRoutes.thread,
-        builder: (context, state) {
-          final sessionId = state.pathParameters['sessionId']!;
-          final extra = state.extra as ThreadRouteExtra?;
-          return ThreadViewPage(
-            sessionId: sessionId,
-            agent: extra?.agent,
-            agentProfileId: extra?.agentProfileId,
-          );
-        },
-      ),
-      GoRoute(
-        path: AppRoutes.newThread,
-        builder: (context, state) {
-          final extra = state.extra as ThreadRouteExtra?;
-          return ThreadViewPage(agentProfileId: extra?.agentProfileId);
-        },
-      ),
-      GoRoute(
-        path: AppRoutes.agentStart,
-        builder: (context, state) => const AgentStartPage(),
-      ),
-      GoRoute(
-        path: AppRoutes.agentProfile,
-        builder: (context, state) {
-          final profileId = state.pathParameters['profileId']!;
-          return AgentProfilePage(profileId: profileId);
-        },
-      ),
-      GoRoute(
         path: AppRoutes.logViewer,
         builder: (context, state) => const LogViewerPage(),
-      ),
-      GoRoute(
-        path: '/project/:projectId',
-        builder: (context, state) {
-          final projectId = state.pathParameters['projectId']!;
-          final extra = state.extra as ProjectDetailRouteExtra?;
-          return ProjectDetailPage(
-            projectId: projectId,
-            projectName: extra?.projectName ?? '',
-          );
-        },
-      ),
-      GoRoute(
-        path: AppRoutes.sessions,
-        builder: (context, state) => const SessionsPage(),
       ),
       // Legacy deep link: conversation inbox is now the shell Messages tab.
       GoRoute(
@@ -160,13 +105,6 @@ GoRouter createAppRouter(Ref ref) {
   );
 }
 
-class ThreadRouteExtra {
-  const ThreadRouteExtra({this.agent, this.agentProfileId});
-
-  final AgentName? agent;
-  final String? agentProfileId;
-}
-
 class SocialChatRouteExtra {
   const SocialChatRouteExtra({required this.title, required this.kind});
 
@@ -178,12 +116,6 @@ class GroupMembersRouteExtra {
   const GroupMembersRouteExtra({required this.title});
 
   final String title;
-}
-
-class ProjectDetailRouteExtra {
-  const ProjectDetailRouteExtra({required this.projectName});
-
-  final String projectName;
 }
 
 class _RouterRefreshNotifier extends ChangeNotifier {

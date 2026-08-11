@@ -3,6 +3,10 @@
 This document describes the layered architecture of the Minos mobile app,
 following the [Flutter Architecture Best Practices](.agents/skills/flutter-apply-architecture-best-practices/SKILL.md).
 
+Product spine: **conversation-first collaboration IM**. Shell tabs are
+Messages / Hosts / Account. Agent session transcript, projects, sessions
+inbox, and Agents Hub were removed from the Mobile product surface.
+
 ## Directory Structure
 
 ```
@@ -11,11 +15,10 @@ lib/
 ├── architecture.dart            # Architecture overview (dartdoc)
 │
 ├── domain/                      # Domain Layer (pure Dart)
-│   ├── models.dart              # Barrel export for all domain models
+│   ├── models.dart              # Barrel export for domain models
 │   ├── minos_core_protocol.dart # Abstract service contract (DI boundary)
-│   ├── active_session.dart      # Agent session state machine
 │   ├── auth_state.dart          # Auth lifecycle states
-│   ├── agent_profile.dart       # Agent configuration model
+│   ├── agent_profile.dart       # Local bot cache / draft model
 │   ├── social_message.dart      # Chat message model
 │   ├── group_member.dart        # Group membership model
 │   └── minos_error_display.dart # Error presentation helpers
@@ -23,47 +26,39 @@ lib/
 ├── infrastructure/              # Data Layer — Services
 │   ├── minos_core.dart          # Rust FFI bridge (implements MinosCoreProtocol)
 │   ├── secure_pairing_store.dart# Keychain persistence
-│   ├── social_cache_store.dart  # SQLite message cache
+│   ├── social_cache_store.dart  # SQLite message cache + outbox SQL
+│   ├── im_outbox_store.dart     # Outbox policy helpers
 │   ├── agent_profile_store.dart # JSON file persistence
-│   ├── app_paths.dart           # Platform path resolution
-│   └── workspace_mru_store.dart # MRU workspace persistence
+│   └── app_paths.dart           # Platform path resolution
 │
-├── data/                        # Data Layer — Repositories (barrel exports)
-│   ├── repositories/
-│   │   └── repositories.dart    # Re-exports repository providers
-│   └── services/
-│       └── services.dart        # Re-exports infrastructure services
+├── data/                        # Data Layer — Repositories / services
+│   ├── repositories/            # Concrete repository providers + adapters
+│   └── services/                # Concrete service/store providers
 │
 ├── application/                 # Application Layer — ViewModels (Riverpod)
-│   ├── minos_providers.dart     # Core data providers (repository role)
+│   ├── minos_providers.dart     # Connection / hosts / presence
 │   ├── auth_provider.dart       # Auth state controller
-│   ├── active_session_provider.dart  # Agent session lifecycle
-│   ├── thread_events_provider.dart   # Live event stream
-│   ├── thread_list_provider.dart     # Session list data
-│   ├── project_providers.dart   # Project CRUD + selection
-│   ├── social_providers.dart    # Social chat state management
-│   ├── agent_profiles_provider.dart  # Agent profile CRUD
-│   ├── group_agent_provider.dart     # Group agent bindings
-│   ├── group_agent_dispatcher.dart   # Agent mention dispatch
+│   ├── social_providers.dart    # Timeline + inbox + friends
+│   ├── im_outbox_worker.dart    # Local IM outbox drain
+│   ├── agent_profiles_provider.dart  # Local bot cache for compose
+│   ├── agent_conversation_actions.dart # Create agent conversation
+│   ├── group_agent_provider.dart     # Participants / mention roster
+│   ├── social_actions.dart      # DM / group create actions
 │   ├── preferred_agent_provider.dart # Preferred agent selection
+│   ├── ui_state_providers.dart  # Shell tab + login form state
 │   ├── log_records_provider.dart     # Debug log mirror
 │   ├── request_trace_records_provider.dart # Request trace mirror
 │   └── root_route_decision.dart # Navigation decision logic
 │
-├── data/
-│   ├── repositories/           # Concrete repository providers + adapters
-│   └── services/               # Concrete service/store providers
-│
-├── ui/                         # UI Layer — Feature-organized implementation
+├── ui/                          # UI Layer — Feature-organized implementation
 │   ├── core/
 │   │   └── widgets/widgets.dart # Shared widget exports
 │   └── features/
 │       ├── auth/                # Auth screens/widgets + barrel
-│       ├── chat/                # Agent session screens/widgets + barrel
-│       ├── projects/            # Project screens/widgets + barrel
-│       ├── agents/              # Agent management screens/widgets + barrel
-│       ├── social/              # Social screens/widgets + barrel
-│       ├── pairing/             # Pairing screens/widgets + barrel
+│       ├── messages/            # Conversation inbox (primary tab)
+│       ├── social/              # Conversation chat / members + chrome
+│       ├── hosts/               # Linked hosts list
+│       ├── account/             # Profile / logout
 │       ├── debug/               # Debug screens/widgets + barrel
 │       └── shell/               # Root app shell, router, navigation
 │
@@ -82,12 +77,14 @@ lib/
 - `data/services/` contains provider-backed service/store access used by repositories.
 - `infrastructure/` contains raw concrete implementations such as `MinosCore` and persistence stores.
 - `MinosCore` implements `MinosCoreProtocol`; FRB remains isolated to infrastructure/generated code.
+- `ThreadRepository` remains as a thin residual for `uiEvents` (snapshot/presence/friend realtime), not a product send path.
 
 ### Application Layer (`lib/application/`)
 - Riverpod providers acting as ViewModels.
 - Manages UI state, handles user interactions, orchestrates data flow.
 - Depends on `domain/` models and `data/repositories/`, never on `ui/` or `infrastructure/` directly.
 - Root dependency injection happens in `main()` by overriding `minosCoreServiceProvider`.
+- Collaboration send path: `SocialConversation` → outbox → `sendChatMessage`.
 
 ### UI Layer (`lib/ui/`)
 - `ui/` contains the actual widget implementations and feature barrels.
@@ -106,6 +103,20 @@ The Application layer depends on repositories instead of concrete services.
 Repositories coordinate service/store access while preserving domain-facing APIs.
 The Infrastructure layer implements domain protocols and low-level persistence.
 No circular dependencies exist between layers.
+
+## Routes (IM-first)
+
+| Route | Page | Purpose |
+|-------|------|---------|
+| `/splash` | splash | bootstrap |
+| `/login` | `LoginPage` | auth |
+| `/` | `AppShellPage` | Messages / Hosts / Account |
+| `/social` | redirect → `/` | legacy inbox deep link |
+| `/social/chat/:conversationId` | `SocialChatPage` | conversation timeline |
+| `/social/chat/:conversationId/members` | `GroupMembersPage` | members |
+| `/log-viewer` | `LogViewerPage` | debug |
+
+Removed from product: `/thread/*`, `/sessions`, `/agent-start`, `/agent-profile/*`, `/project/*`.
 
 ## Adding a New Feature
 

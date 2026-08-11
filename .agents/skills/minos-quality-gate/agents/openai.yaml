@@ -1,0 +1,4 @@
+interface:
+  display_name: "Minos Quality Gate"
+  short_description: "Run CI-equivalent checks before handoff"
+  default_prompt: "Use $minos-quality-gate to verify this Minos change before handoff."

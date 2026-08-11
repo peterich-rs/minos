@@ -90,22 +90,11 @@ class AccountPage extends ConsumerWidget {
                   const SizedBox(height: MinosSpacing.lg),
                   MinosSurface(
                     bordered: true,
-                    child: Column(
-                      children: <Widget>[
-                        _SettingsRow(
-                          icon: CupertinoIcons.chat_bubble_2,
-                          title: 'Agent 会话',
-                          subtitle: '按 Agent session 查看历史（次级）',
-                          onTap: () => context.push(AppRoutes.sessions),
-                        ),
-                        Divider(height: 1, color: colors.borderSubtle),
-                        _SettingsRow(
-                          icon: CupertinoIcons.ant,
-                          title: '开发者工具',
-                          subtitle: '日志与请求追踪',
-                          onTap: () => context.push(AppRoutes.logViewer),
-                        ),
-                      ],
+                    child: _SettingsRow(
+                      icon: CupertinoIcons.ant,
+                      title: '开发者工具',
+                      subtitle: '日志与请求追踪',
+                      onTap: () => context.push(AppRoutes.logViewer),
                     ),
                   ),
                   const SizedBox(height: MinosSpacing.lg),

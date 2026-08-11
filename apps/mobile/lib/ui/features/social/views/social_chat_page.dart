@@ -5,16 +5,13 @@ import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:flutter_list_view/flutter_list_view.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:minos/application/agent_activity_provider.dart';
 import 'package:minos/application/group_agent_provider.dart';
 import 'package:minos/application/minos_providers.dart';
 import 'package:minos/application/social_providers.dart';
-import 'package:minos/data/repositories/social_repository.dart';
 import 'package:minos/domain/agent_profile.dart';
 import 'package:minos/domain/group_member.dart';
 import 'package:minos/domain/message_sender_ext.dart';
 import 'package:minos/domain/social_message.dart';
-import 'package:minos/infrastructure/platform_int64.dart';
 import 'package:minos/src/rust/api/minos.dart';
 import 'package:minos/ui/core/widgets/error_feedback.dart';
 import 'package:minos/ui/core/widgets/minos_button.dart';
@@ -613,62 +610,6 @@ class _ConversationMessagePane extends ConsumerWidget {
   final String conversationId;
   final FlutterListViewController scrollController;
 
-  Future<void> _openAgentSession(
-    BuildContext context,
-    WidgetRef ref, {
-    required String conversationId,
-    required SocialChatMessage message,
-  }) async {
-    final fromId = message.agentSessionIdFromMessageId;
-    String? sessionId = fromId;
-    if (sessionId == null || sessionId.isEmpty) {
-      try {
-        final sessions = await ref
-            .read(socialRepositoryProvider)
-            .listAgentSessions(conversationId: conversationId, limit: 20);
-        final agentKey = message.sender.identityId.trim();
-        final matched = sessions.where((s) {
-          final id = s.agentId?.trim();
-          return id != null &&
-              id.isNotEmpty &&
-              (id == agentKey || id.toLowerCase() == agentKey.toLowerCase());
-        }).toList();
-        final pool = matched.isNotEmpty ? matched : sessions;
-        if (pool.isNotEmpty) {
-          pool.sort((a, b) {
-            return platformInt64ToInt(
-              b.lastActivityAtMs,
-            ).compareTo(platformInt64ToInt(a.lastActivityAtMs));
-          });
-          sessionId = pool.first.sessionId;
-        }
-      } catch (error) {
-        if (!context.mounted) return;
-        showMinosToast(
-          context,
-          title: '无法打开 session',
-          description: error.toString(),
-          destructive: true,
-        );
-        return;
-      }
-    }
-    if (!context.mounted) return;
-    if (sessionId == null || sessionId.isEmpty) {
-      showMinosToast(context, title: '暂无该 Agent 的执行 session');
-      return;
-    }
-    // Subscribe so ThreadView has a live topic when opened from chat.
-    unawaited(
-      ref
-          .read(socialRepositoryProvider)
-          .subscribeAgentSession(sessionId: sessionId),
-    );
-    unawaited(
-      context.push(AppRoutes.thread.replaceFirst(':sessionId', sessionId)),
-    );
-  }
-
   Future<void> _showMessageActions(
     BuildContext context,
     WidgetRef ref, {
@@ -770,7 +711,6 @@ class _ConversationMessagePane extends ConsumerWidget {
                   );
                   final isMine =
                       message.sender.accountIdOrNull == state.myAccountId;
-                  final isAgent = message.senderType == SenderType.agent;
                   final mentionsMe =
                       !isMine &&
                       state.myAccountId != null &&
@@ -826,14 +766,6 @@ class _ConversationMessagePane extends ConsumerWidget {
                           mentionsMe: mentionsMe,
                           onRetry: retryAction,
                           onLongPress: actionHandler,
-                          onOpenAgentSession: !isAgent
-                              ? null
-                              : () => _openAgentSession(
-                                  context,
-                                  ref,
-                                  conversationId: conversationId,
-                                  message: message,
-                                ),
                           onToggleReaction:
                               message.serverMessageId == null ||
                                   message.isRecalled
@@ -902,10 +834,6 @@ class _ConversationComposer extends ConsumerWidget {
               .toList(growable: false)
         : const <GroupMember>[];
     final hasMentionable = mentionable.isNotEmpty;
-    final activity = ref
-        .watch(conversationAgentActivityProvider(conversationId))
-        .asData
-        ?.value;
 
     return Container(
       decoration: BoxDecoration(
@@ -926,10 +854,6 @@ class _ConversationComposer extends ConsumerWidget {
                   .clear(),
             ),
             const SizedBox(height: 10),
-          ],
-          if (activity != null) ...<Widget>[
-            _AgentActivityTicker(activity: activity),
-            const SizedBox(height: 8),
           ],
           Row(
             children: <Widget>[
@@ -958,194 +882,6 @@ class _ConversationComposer extends ConsumerWidget {
       ),
     );
   }
-}
-
-class _AgentActivityTicker extends StatelessWidget {
-  const _AgentActivityTicker({required this.activity});
-
-  final AgentActivitySnapshot activity;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.minosColors;
-    final toneColor = _activityToneColor(context, activity.tone);
-    final textStyle = Theme.of(context).textTheme.labelMedium?.copyWith(
-      color: colors.textPrimary,
-      fontWeight: FontWeight.w600,
-      height: 1.1,
-    );
-    return AnimatedSwitcher(
-      duration: const Duration(milliseconds: 180),
-      switchInCurve: Curves.easeOutCubic,
-      switchOutCurve: Curves.easeInCubic,
-      // Key by session only — label changes every stream token and must not
-      // recreate the ticker (or collide when labels match across frames).
-      child: SizedBox(
-        key: ValueKey(activity.sessionId),
-        height: 34,
-        width: double.infinity,
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: colors.surfaceMuted.withValues(alpha: 0.72),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: toneColor.withValues(alpha: 0.28)),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10),
-            child: Row(
-              children: <Widget>[
-                Icon(_activityIcon(activity.kind), size: 15, color: toneColor),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: DefaultTextStyle.merge(
-                    style: textStyle,
-                    maxLines: 1,
-                    softWrap: false,
-                    overflow: TextOverflow.clip,
-                    child: _MarqueeText(text: activity.label),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-IconData _activityIcon(AgentActivityKind kind) {
-  return switch (kind) {
-    AgentActivityKind.reasoning => CupertinoIcons.sparkles,
-    AgentActivityKind.tool => CupertinoIcons.chevron_left_slash_chevron_right,
-    AgentActivityKind.success => CupertinoIcons.gear_alt_fill,
-    AgentActivityKind.error => CupertinoIcons.exclamationmark_triangle,
-    AgentActivityKind.running => CupertinoIcons.gear_alt_fill,
-  };
-}
-
-Color _activityToneColor(BuildContext context, AgentActivityTone tone) {
-  final colors = context.minosColors;
-  return switch (tone) {
-    AgentActivityTone.info => colors.accent,
-    AgentActivityTone.success => colors.accent,
-    AgentActivityTone.error => colors.danger,
-  };
-}
-
-class _MarqueeText extends StatefulWidget {
-  const _MarqueeText({required this.text});
-
-  final String text;
-
-  @override
-  State<_MarqueeText> createState() => _MarqueeTextState();
-}
-
-class _MarqueeTextState extends State<_MarqueeText>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _controller = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 6200),
-  );
-
-  @override
-  void initState() {
-    super.initState();
-    unawaited(_controller.repeat());
-  }
-
-  @override
-  void didUpdateWidget(_MarqueeText oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.text != widget.text) {
-      _controller.reset();
-      unawaited(_controller.repeat());
-    }
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final style = DefaultTextStyle.of(context).style;
-    // Cap display length so stream previews cannot explode layout.
-    final display = _marqueeDisplayText(widget.text);
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final maxW = constraints.maxWidth;
-        if (!maxW.isFinite || maxW <= 0) {
-          return Text(
-            display,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            softWrap: false,
-          );
-        }
-
-        final painter = TextPainter(
-          text: TextSpan(text: display, style: style),
-          maxLines: 1,
-          textDirection: Directionality.of(context),
-        )..layout(maxWidth: double.infinity);
-        final textWidth = painter.width;
-        if (textWidth <= maxW) {
-          return Text(
-            display,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            softWrap: false,
-          );
-        }
-
-        const gap = 42.0;
-        final distance = textWidth + gap;
-        // OverflowBox lets the scrolling Row size itself beyond the viewport;
-        // ClipRect hides the excess. Without this, Flutter asserts Row overflow
-        // even though the marquee is intentionally wider than the slot.
-        return ClipRect(
-          child: OverflowBox(
-            alignment: Alignment.centerLeft,
-            minWidth: 0,
-            maxWidth: double.infinity,
-            minHeight: 0,
-            maxHeight: constraints.maxHeight.isFinite
-                ? constraints.maxHeight
-                : null,
-            child: AnimatedBuilder(
-              animation: _controller,
-              builder: (context, child) {
-                return Transform.translate(
-                  offset: Offset(-distance * _controller.value, 0),
-                  child: child,
-                );
-              },
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  Text(display, maxLines: 1, softWrap: false),
-                  const SizedBox(width: gap),
-                  Text(display, maxLines: 1, softWrap: false),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
-
-String _marqueeDisplayText(String raw) {
-  final collapsed = raw.replaceAll(RegExp(r'\s+'), ' ').trim();
-  if (collapsed.isEmpty) return '…';
-  const maxChars = 80;
-  if (collapsed.length <= maxChars) return collapsed;
-  return '${collapsed.substring(0, maxChars - 1)}…';
 }
 
 class _ComposerReplyBanner extends StatelessWidget {
