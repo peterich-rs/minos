@@ -3,7 +3,7 @@
 Status: Refined by 0018 (entry-point and storage)
 Date: 2026-04-24
 Owner: fannnzhang
-Related spec: `docs/superpowers/specs/macos-relay-client-migration-design.md`
+Related working specification: retired; this ADR is the retained decision record.
 
 ## Context
 

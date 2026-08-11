@@ -90,10 +90,6 @@ Negative:
 
 ## Related
 
-- Spec: `docs/superpowers/specs/codex-typed-protocol-design.md`
-- Plan: `docs/superpowers/plans/10-codex-typed-protocol.md`
-- Refines wire-format details from
-  `docs/superpowers/specs/codex-app-server-integration-design.md`
-  §10.1 (wire format) and §6.4 (approval method names).
+- Current wire-format details live with `minos-codex-protocol` types, generated schemas, and their tests; the working plan is retired.
 - Prior bridge ADR: `docs/adr/0009-codex-app-server-ws-transport.md`
 - Prior approval ADR: `docs/adr/0010-agent-event-raw-variant.md`

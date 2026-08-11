@@ -51,7 +51,7 @@
 |------|------|------|
 | `rpc` | `MinosRpc` trait (jsonrpsee `#[rpc]`) | 共享服务 trait: pair, health, list_clis, start_agent, send_user_message 等 |
 | `messages` | 1000+ 行 DTO | 所有 RPC 方法、HTTP 端点、社交功能的请求/响应类型 |
-| `envelope` | `Envelope` (Forward, Forwarded, Event, Ingest), `EventKind` | WebSocket relay 帧格式 |
+| `realtime` | `ClientFrame` / `ServerFrame` / `DurableEvent` / topics | 正式 `/ws/client` · `/ws/host` 帧格式 |
 | `auth` | `AuthRequest/Response`, `RefreshRequest/Response` | 认证 HTTP DTO |
 | `realtime` | `ClientFrame`, `ServerFrame`, `DurableEvent` (17 变体), `RealtimeTopic` | Topic-based 实时网关线类型 |
 | `local_rpc` | `ListConversationMessagesParams/Response`, `AppendConversationMessageParams`, `StartAgentInConversationRequest`, `RemoveConversationAgentParams/Response` | Desktop 本地 RPC 类型 |

@@ -13,21 +13,13 @@
 | [architecture-mobile.md](architecture-mobile.md) / [architecture-desktop.md](architecture-desktop.md) / [architecture-web.md](architecture-web.md) | 各端 UI 与投影 |
 | [architecture-business-flow.md](architecture-business-flow.md) | 端到端业务步骤 |
 | [architecture-shared-crates.md](architecture-shared-crates.md) | `minos-protocol` / `minos-ui-protocol` 线类型 |
-| [superpowers/specs/2026-08-02-hub-collaboration-message-ssot.md](superpowers/specs/2026-08-02-hub-collaboration-message-ssot.md) | **协作气泡 Hub SSOT 收敛**：退役 dual-write、Agent 单写者 |
-| [superpowers/specs/2026-08-03-im-reliability-program/README.md](superpowers/specs/2026-08-03-im-reliability-program/README.md) | **IM 可靠性总计划**（客户端 Sync + 后端投递/编排）；[TASKS](superpowers/specs/2026-08-03-im-reliability-program/TASKS.md) |
-| [superpowers/specs/2026-08-03-realtime-surface-model.md](superpowers/specs/2026-08-03-realtime-surface-model.md) | **全局实时面**：Tier T0–T4、订阅拓扑、payload 厚度、新增功能 checklist；非 case-by-case |
-| [superpowers/specs/2026-08-03-client-im-sync-engine.md](superpowers/specs/2026-08-03-client-im-sync-engine.md) | 客户端 Sync Engine 终态 |
-| [superpowers/specs/2026-08-03-backend-im-delivery-orchestration.md](superpowers/specs/2026-08-03-backend-im-delivery-orchestration.md) | 后端 Outbox 车道 / Push / **Agent inbox**（表名可仍为 dispatch）/ CompletionWatch 终态 |
-| [superpowers/specs/2026-08-09-agent-participant-delivery.md](superpowers/specs/2026-08-09-agent-participant-delivery.md) | **Agent = bot participant**：mention → participant delivery → runtime → agent 回消息 |
-| [superpowers/specs/global-bot-identity-design.md](superpowers/specs/global-bot-identity-design.md) | **全局 bot 身份**：数字肉身在 Hub `agents`；进群 = membership；session per conversation |
-| [superpowers/specs/bot-mailbox-ws-im-bus-design.md](superpowers/specs/bot-mailbox-ws-im-bus-design.md) | **WS 原生 IM + Bot 逻辑邮箱**：Account AppendMessage；Host BotInboxDelivery；无 per-bot WS |
 | [adr/0021-agent-as-conversation-bot-participant.md](adr/0021-agent-as-conversation-bot-participant.md) | 产品决策：消息驱动协作；Host 为 runtime port |
-| ADR 0004 / 0009 / 0011 | JSON-RPC、Broker 拓扑、Envelope 历史决策 |
+| ADR 0004 / 0009 / 0011 | JSON-RPC、Broker 拓扑等历史决策 |
 | ADR 0020 | Account vs Host 人机分权（与 bot participant 正交） |
 
 线类型源码：`crates/minos-protocol/src/realtime.rs`。
 
-**文档权威阶梯（冲突时）**：ADR 0021 + 本文 §1/§3 → [global-bot-identity](superpowers/specs/global-bot-identity-design.md)（身份/肉身）→ [bot-mailbox-ws-im-bus](superpowers/specs/bot-mailbox-ws-im-bus-design.md)（写路径/邮箱/Host 口）→ participant-delivery（房规细节）→ Hub SSOT / delivery orchestration 实现细节 → 各端 architecture-* 。
+**文档权威阶梯（冲突时）**：ADR 0021 决定产品边界；本文定义消息、身份与投递不变量；各端 `architecture-*.md` 定义其实现边界；最终以代码、共享线类型和测试为准。实施计划、review 与阶段任务不构成权威来源。
 
 ---
 
@@ -38,7 +30,7 @@
 Minos 的**产品核心是对话协作**（Project → Conversation → Timeline），形态对齐成熟 IM（Slack / 企微 / Discord）：同一账号多端连续聊天；**不是**「远程 Agent 运维台」，也**不是**以 HostCommand 总线当协作主协议。
 
 - **主场景**：人与人、人与 **bot 成员（Agent）** 在同一 Conversation 时间线协作（发消息、@、回复、撤回、reaction、未读与通知）。  
-- **Agent / Bot**：Hub 上的 **全局唯一 bot 用户**（稳定 `agent_id` + 数字肉身：模型/推理/系统提示词/runtime 等）——可被拉入多个 conversation（membership），可被 @、可发气泡；**不是**真人 Account（无登录 JWT）。类比 Slack Bot / Discord Bot。每个 conversation 仅为该 bot 维护独立 **session**（执行上下文），进群不新建 bot。见 [global-bot-identity-design](superpowers/specs/global-bot-identity-design.md)。  
+- **Agent / Bot**：Hub 上的 **全局唯一 bot 用户**（稳定 `agent_id` + 数字肉身：模型/推理/系统提示词/runtime 等）——可被拉入多个 conversation（membership），可被 @、可发气泡；**不是**真人 Account（无登录 JWT）。类比 Slack Bot / Discord Bot。每个 conversation 仅为该 bot 维护独立 **session**（执行上下文），进群不新建 bot。
 - **协作驱动**：**纯消息**。`@人` 与 `@agent` 都是 mention → participant delivery；bot 的「执行身体」是 Host 上的 daemon/CLI，属于 **runtime 适配**，不是第二套协作模型。  
 - **Host / Daemon**：bot 落地的算力与工具边界；对用户是能力面，不是每天打开的主隐喻。`/ws/host` 是 **执行面传输**，不是 IM 主轴。本地 agent profile 可作 cache，**不是**多端 bot 身份 SSOT。
 
@@ -63,11 +55,11 @@ Desktop：主舞台是 **Timeline + Composer**；Session / Approval 是侧栏或
 
 1. **对话是 SSOT 容器**。列表、未读、@、reaction、agent session 都从属于 `conversation_id`。  
 2. **Cloud 不跑 Agent**。云端是 **IM + participant delivery + 投影中枢**；CLI 只在用户 Host。  
-3. **Hub 是多端协作 SSOT（人读气泡、@、未读、recall）**；Host 本地 SQLite 是 **Agent 原始事件 / 本地工作台** SSOT。禁止聊天气泡对等双权威。见 [Hub SSOT](superpowers/specs/2026-08-02-hub-collaboration-message-ssot.md)。  
+3. **Hub 是多端协作 SSOT（人读气泡、@、未读、recall）**；Host 本地 SQLite 是 **Agent 原始事件 / 本地工作台** SSOT。禁止聊天气泡对等双权威。
 4. **写路径先事务后推送**（Transactional Outbox）；端上静默 dual-write **不算**满足。  
 5. **Attention 统一建模**（§3.4）：人 @、bot @、审批、失败 session 共享「谁需要被打扰」。  
 6. **最新架构优先**（AGENTS.md Development-State Policy）。  
-7. **Agent = bot participant**（[ADR 0021](adr/0021-agent-as-conversation-bot-participant.md) / [participant delivery](superpowers/specs/2026-08-09-agent-participant-delivery.md)）：  
+7. **Agent = bot participant**（[ADR 0021](adr/0021-agent-as-conversation-bot-participant.md)）：
    - 发送成功 = 用户消息落库；bot 投递进 **Agent inbox**（异步）。  
    - Runtime 调用（今日 HostCommand）是 inbox consumer 的私有适配，**不是**产品层「命令式协作」。  
 8. **Agent 最终气泡写者（路径不同，Hub 权威唯一）**：  
@@ -123,7 +115,7 @@ Desktop：主舞台是 **Timeline + Composer**；Session / Approval 是侧栏或
 │  ┌──────────────┐  ┌────────────────┐  ┌─────────────────┐                  │
 │  │ Access 层    │  │ Logic 层       │  │ Delivery 层     │                  │
 │  │ HTTP /v1/*   │  │ Domain UC      │  │ RealtimeFanout  │                  │
-│  │ /ws/client   │  │ 权限/幂等/状态  │  │ SessionRegistry │                  │
+│  │ /ws/client   │  │ 权限/幂等/状态  │  │ ConnRegistry    │                  │
 │  │ /ws/host     │  │ Host Command   │  │ Subscriptions   │                  │
 │  │ WS ticket    │  │ Ingest/Transl. │  │ MessageBus      │                  │
 │  └──────┬───────┘  └───────┬────────┘  └────────┬────────┘                  │
@@ -235,7 +227,7 @@ ServerFrame::Hello { … }
 **不变量**：Hello 静默（无历史洪水）；`resume_after < retention_floor` → `SnapshotRequired`（冷重建），禁止静默空回放。  
 **Host 鉴权不变量**：强身份（Link 证明 + hashed `hit_*` + revoke 踢连接）保留；Host ticket 重复链删除后，邮箱/WS IM 做完也不会再出现 self→ticket→WS 三连验。
 
-代码：`realtime/gateway.rs`、`realtime/liveness.rs`、`realtime/presence.rs`；线类型 `PresencePayload` / `PRESENCE_STREAM_KIND`（`minos-protocol`）；Host Bearer 见 [bot-mailbox-ws-im-bus-design](superpowers/specs/bot-mailbox-ws-im-bus-design.md)。
+代码：`realtime/gateway.rs`、`realtime/liveness.rs`、`realtime/presence.rs`；线类型 `PresencePayload` / `PRESENCE_STREAM_KIND`（`minos-protocol`）。
 
 ### 3.3 Topic 模型（频道 / 会话分区）
 
@@ -285,7 +277,7 @@ created_at_ms, read_at_ms?, resolved_at_ms?
 
 #### 3.4.2 @Mention（人 + bot，统一管线）
 
-**目标写路径（participant delivery；[规范](superpowers/specs/2026-08-09-agent-participant-delivery.md)）**：
+**目标写路径（participant delivery）**：
 
 ```
 AppendMessage / POST send-message (Account)
@@ -362,7 +354,7 @@ Agent tool 需权限
 | 层 | 状态 | 说明 |
 |----|------|------|
 | Cloud / 多端 | **已实现（Hub SSOT）** | `message_reactions` + `POST …/reactions/toggle` + Durable `ConversationMessageReactionUpdated`（**conversation topic only**） |
-| Desktop UI | **已接 Hub**（代码）；可靠 Outbox / Mobile UI → [IM Reliability C5](superpowers/specs/2026-08-03-im-reliability-program/TASKS.md) | 非 local-only |
+| Desktop UI | Hub authoritative timeline；端侧写入使用 Intent Outbox，并以 Hub ACK 或 durable echo 确认 | 非 local-only |
 | Desktop 本地 workbench | daemon `LocalReaction*` | 仅 Host-local message ids；禁止与 Hub 双 SSOT |
 
 ```text
@@ -400,7 +392,7 @@ Reaction **不** 写 account topic、**不** 驱动 rail / sidebar unread。若�
 
 `NotificationService` + `decide()` 目标类别：`message` / `approval` / `session_ended`；偏好含 `direct_message`、`group_mention`、`approval_required`、quiet hours。
 
-**终态策略**（实现见 [Backend Delivery B1](superpowers/specs/2026-08-03-backend-im-delivery-orchestration.md)；**禁止** 枚举存在但 caller 不接）：
+**终态策略**（**禁止** 枚举存在但 caller 不接）：
 
 | 场景 | 推送策略 |
 |------|----------|
@@ -518,21 +510,13 @@ Agent CLI
 当客户端无活跃 WS（或超出 online grace）时，根据 **presence + 偏好 + 免打扰 + event_id 幂等 + UX cooldown** 决策 APNs/FCM。  
 Push **只负责唤醒**；正文一致性仍靠 Durable + HTTP 同步。
 
-**现状债 → 终态**：见 [Backend IM Delivery](superpowers/specs/2026-08-03-backend-im-delivery-orchestration.md) B1（UserOnline 接入、Approval target、push_dispatch_log）。
+**不变量**：`UserOnline`、approval target 与 `push_dispatch_log` 都属于后端投递实现的一部分；缺少任一环时不得把推送标记为已完成。
 
 ---
 
-### 4.7 可靠性终态（Program 指针）
+### 4.7 可靠性不变量
 
-持久化正确 ≠ 端到端可靠。以下两份 **只描述终态结构**（AGENTS.md Final-Architecture Planning Rule）：
-
-| 半边 | Spec |
-|------|------|
-| 客户端 Sync Engine | [2026-08-03-client-im-sync-engine.md](superpowers/specs/2026-08-03-client-im-sync-engine.md) |
-| 后端投递 / Dispatch / Completion / Session | [2026-08-03-backend-im-delivery-orchestration.md](superpowers/specs/2026-08-03-backend-im-delivery-orchestration.md) |
-| 任务图 | [2026-08-03-im-reliability-program](superpowers/specs/2026-08-03-im-reliability-program/README.md) |
-
-共享契约：`client_message_id`；agent 气泡 id = `agent-result:{conv}:{session}:{origin_message_id}`；`message_seq` 排序；durable `event_id` 可重放可幂等消化。
+持久化正确 ≠ 端到端可靠。所有客户端和后端都遵守以下共享契约：`client_message_id`；agent 气泡 id = `agent-result:{conv}:{session}:{origin_message_id}`；`message_seq` 排序；durable `event_id` 可重放可幂等消化。端侧实现见本文件 §7，后端事务、outbox、投递与 completion 生命周期见 §5、§8、§10。
 
 ---
 
@@ -563,8 +547,8 @@ COMMIT
 
 `RealtimeFanout` 持有：
 
-- `SessionRegistry`：conn → principal / installation  
-- `SubscriptionManager`：topic → 在线订阅者  
+- `SubscriptionManager`：topic → 在线订阅者（formal gateway 推送）
+- `RealtimeConnectionRegistry`：installation → 当前连接、同设备替换、在线计数 / push grace
 - `StoreHandle`：补拉 / 认领  
 - `MessageBusBackend`：`Inline`（单机）| `Redis`（多实例）
 
@@ -572,9 +556,9 @@ COMMIT
 
 | 方法 | 用途 |
 |------|------|
-| `fanout_ui_event` | Stream 平面，定向设备/会话 |
-| `fanout_social_message` | 社交消息到关联账户客户端 |
-| `dispatch_outbox_batch` | Durable 出站批处理 |
+| `fanout_stream_event` | 即时 StreamEvent（presence / ui_event / agent_error 等） |
+| `dispatch_outbox_batch` | Social Durable 出站批处理 |
+| `dispatch_host_command_outbox_batch` | HostCommandIssued Durable 出站 |
 
 ### 5.3 多实例
 
@@ -767,11 +751,7 @@ topic_cursors: Map<topic, last_topic_seq>
 **目标读路径（Linked）**：打开 conversation → `Subscribe conversation:{id}` + `resume_after` → 冷拉 gap（`before_seq` / `after_seq`）；UI merge「Hub 气泡 + 本地 tool/git 卡」（**同 id 相等**；禁止 body 软去重）。  
 **目标写路径（Linked）**：Composer → Account WS **`AppendMessage`**（`client_message_id` 幂等 + `client_live`）→ 客户端 Outbox 可重试；bot 激活经 Hub Agent inbox；Agent 最终气泡由 **AppendBotMessage** / TurnCompletionProjector；id = `agent-result:{conv}:{session}:{origin_message_id}`。
 
-Hub SSOT 收敛：  
-→ [2026-08-02-hub-collaboration-message-ssot.md](superpowers/specs/2026-08-02-hub-collaboration-message-ssot.md)  
-
-可靠性终态（客户端 + 后端编排）：  
-→ [2026-08-03-im-reliability-program](superpowers/specs/2026-08-03-im-reliability-program/README.md)
+Hub 协作消息、客户端同步与后端编排均以本文件的 SSOT、Outbox、cursor 和 participant-delivery 不变量为准。
 
 #### 7.4.1 当前实现（Phase 2–5 已收敛主体）
 
@@ -789,7 +769,7 @@ Hub SSOT 收敛：
 | 撤回 | Hub `POST …/messages/:id/recall` + Durable `*Recalled` | conversation + account topics | ✅ |
 | Reaction | Hub toggle + conversation durable | Hub API + Intent Outbox | Desktop/Mobile `reaction_toggle` outbox + B6 `client_op_id` 幂等；conversation-only fanout |
 | 未读 / mark-read | Linked 打开会话 → `POST …/read` body `{ read_up_to_message_seq }`（客户端 observed watermark，服务端单调 MAX clamp） | Hub + local count | ✅ **observed-seq**；禁止服务端静默标到最新 |
-| Mobile `@agent` → bot 投递 | 消息落库后 **Agent inbox** + CompletionWatch(per origin×session) | Backend **B3/B4**；产品语义见 [participant delivery](superpowers/specs/2026-08-09-agent-participant-delivery.md) | ✅ 异步 enqueue；**多 @ fan-out**（`UNIQUE(origin, agent_id)`）；watch 键 = `{origin}:{session_id}`。物理表 `bot_message_deliveries` |
+| Mobile `@agent` → bot 投递 | 消息落库后 **Agent inbox** + CompletionWatch(per origin×session) | participant delivery | 异步 enqueue；**多 @ fan-out**（`UNIQUE(origin, agent_id)`）；watch 键 = `{origin}:{session_id}`。物理表 `bot_message_deliveries` |
 | Agent 表情互动 | teamwork MCP `react_to_message` → daemon 本地 reaction | Host workbench | ✅ **硬门禁**：仅允许对 **@ 了该 agent** 的消息；actor_kind=`agent` |
 | Session 生命周期 | `session_lifecycle` job：失联 host → session `failed` + durable end；watch TTL → 失败气泡 + remove | Backend **B5** | ✅ 非 COUNT-only |
 
@@ -812,7 +792,7 @@ Hub SSOT 收敛：
 - TurnCompletionProjector：dispatch 时 arm watch，host ingest 事件驱动投影（2s settle 复检），不再 100ms 无限轮询  
 - 群成员 owner/admin 角色 + remove 后 revoke subscription + durable membership 事件  
 
-**全量 review / 修复追踪**：[2026-08-09-im-reliability-full-review.md](superpowers/specs/2026-08-09-im-reliability-full-review.md)
+Review 与实施追踪属于 PR/issue，不作为仓库架构文档的一部分。
 
 **仍待 / 已知缺口**：
 

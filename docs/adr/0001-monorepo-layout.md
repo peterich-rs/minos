@@ -35,7 +35,6 @@ minos/
 │   ├── macos/                      # Xcode project (MenuBarExtra app)
 │   └── mobile/                     # Flutter project
 ├── docs/
-│   ├── superpowers/specs/
 │   └── adr/
 ├── scripts/                        # bootstrap shell only
 └── .github/workflows/

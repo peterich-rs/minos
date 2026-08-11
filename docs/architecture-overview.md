@@ -6,7 +6,7 @@
 
 Minos 是一个 **以 Conversation 协作为核心** 的远程 AI 编码协作产品（Slack / 企微式 IM + 对话内 bot）：在 Project 下的时间线中，人与人、人与 **Agent（bot 成员）** 协作；手机 / 浏览器 / Desktop 经云端 Hub 同步消息、@、未读与审批 Attention。Agent **不是**真人登录账号，而是 conversation 一等参与者；其执行身体在用户 Mac/Linux Host 上的 `codex` / `claude` / `gemini` / `opencode` 等 CLI。
 
-**产品主轴是消息驱动的聊天协作**；HostCommand / `/ws/host` 是 bot runtime 传输，不是协作主协议。决策见 [ADR 0021](adr/0021-agent-as-conversation-bot-participant.md)；投递模型见 [agent-participant-delivery](superpowers/specs/2026-08-09-agent-participant-delivery.md)；**全局 bot 身份 / 数字肉身**见 [global-bot-identity-design](superpowers/specs/global-bot-identity-design.md)；消息体系 SSOT 见 [architecture-messaging.md](architecture-messaging.md)。
+**产品主轴是消息驱动的聊天协作**；HostCommand / `/ws/host` 是 bot runtime 传输，不是协作主协议。产品决策见 [ADR 0021](adr/0021-agent-as-conversation-bot-participant.md)，消息、bot 身份与投递模型以 [architecture-messaging.md](architecture-messaging.md) 为 SSOT。
 
 ## Glossary
 
@@ -44,10 +44,7 @@ Desktop 同机双角色：Account UI 走 `/ws/client` 聊天；内嵌 daemon 走
 
 生产部署（runtime-only VPS，不在机器上 clone 源码）：[ops/vps-deploy.md](ops/vps-deploy.md)。
 
-长期产品与身份方向（Supabase exchange、Host 同账号链接、Web 对齐 Desktop UI、Mobile 云端查看）：
-
-- L0 纲领：[superpowers/specs/2026-07-30-cloud-identity-clients-long-term.md](superpowers/specs/2026-07-30-cloud-identity-clients-long-term.md)
-- L1/L2 执行与依赖图：[superpowers/specs/2026-07-30-program/](superpowers/specs/2026-07-30-program/README.md)
+账户身份、Host Link 与多端职责由下列各子系统架构文档描述；实施计划和任务图不属于长期参考文档。
 
 ## 仓库结构
 
@@ -55,7 +52,7 @@ Desktop 同机双角色：Account UI 走 `/ws/client` 聊天；内嵌 daemon 走
 Minos/
 ├── crates/                          # Rust workspace crates
 │   ├── minos-domain/                # 核心域类型（ID、错误、枚举）
-│   ├── minos-protocol/              # 线协议（JSON-RPC、Envelope、Realtime）
+│   ├── minos-protocol/              # 线协议（JSON-RPC、Realtime ClientFrame/ServerFrame）
 │   ├── minos-transport/             # 传输层（WS client、backoff）
 │   ├── minos-cli-detect/            # CLI agent 检测
 │   ├── minos-prompt-runtime/        # Session 提示词编译（bundle + digest）

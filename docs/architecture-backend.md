@@ -29,7 +29,7 @@
 4. 连接数据库（SQLite 或 Postgres），运行 migrations
 5. 构建 `RuntimeShell` → `AppContext`（所有服务的组合根）
 6. 绑定 TCP 监听器，构建 Axum Router，启动 HTTP 服务
-7. 优雅停机：广播 `ServerShutdown`，drain 500ms，关闭数据库
+7. 优雅停机：`RealtimeConnectionRegistry::revoke_all` 关闭正式 WS，drain 500ms，关闭数据库
 
 ## 配置 (`src/config.rs`)
 
@@ -84,9 +84,10 @@
 /v1/notifications/*   POST   推送令牌/偏好
 /v1/media/*           GET/POST/PUT  附件 blob（R2 / 本地对象存储）
 /v1/social/* · /v1/agents/*  POST   Agent 注册 / conversation bot roster / agent 气泡上行
+                                 （`http/v1/social.rs` 为活跃编排层，非已删除的 domain façade）
 ```
 
-协作模型 SSOT：[architecture-messaging.md](architecture-messaging.md)；bot 投递：[agent-participant-delivery](superpowers/specs/2026-08-09-agent-participant-delivery.md)；人机分权：[ADR 0020](adr/0020-server-centric-auth-and-account-pairs.md) + [ADR 0021](adr/0021-agent-as-conversation-bot-participant.md)。
+协作模型与 bot 投递 SSOT：[architecture-messaging.md](architecture-messaging.md)；人机分权：[ADR 0020](adr/0020-server-centric-auth-and-account-pairs.md) + [ADR 0021](adr/0021-agent-as-conversation-bot-participant.md)。
 
 ### 中间件栈（自底向上）
 
@@ -176,14 +177,14 @@ Link proof 签名载荷：`"{installation_id}:{nonce}:v1/hosts/link"`（无 lead
 
 - 发送 `Hello` 帧（conn_id, server_time_ms, heartbeat_interval_ms）
 - 自动订阅默认 topic（Account 或 Host）
-- `tokio::select!` 分支：客户端消息 / 推送通道 / 遗留 outbox / 撤销信号
-- 关闭码: 4401（认证撤销）、1011（内部错误）、4400（请求错误）
+- 注册进 `RealtimeConnectionRegistry`（同设备重连替换 + superseded/auth_revoked 控制信号）
+- `tokio::select!` 分支：客户端消息 / 正式推送通道 / 撤销信号 / heartbeat
+- 关闭码: 4401（认证撤销 / session_superseded）、1011（内部错误）、4400（请求错误）
 
 ### RealtimeFanout（核心扇出引擎）
 
-- 持有 `SessionRegistry`、`SubscriptionManager`、`StoreHandle`、`MessageBusBackend`
-- `fanout_ui_event()` — 推送到特定设备会话
-- `fanout_social_message()` — 推送到所有关联账户的移动端会话
+- 持有 `SubscriptionManager`、`StoreHandle`、`MessageBusBackend`（连接权威在 `RealtimeConnectionRegistry`）
+- `fanout_stream_event()` — 即时 StreamEvent（presence / ui_event / agent_error 等）
 - `dispatch_outbox_batch()` — 认领 `social_durable` 车道 outbox，publish 后 ack（不阻塞 host 命令）
 - `dispatch_host_command_outbox_batch()` — 认领 `host_command` 车道；publish 后异步等待 host ack（过期 dead_letter，禁止假成功 ack）
 
@@ -198,7 +199,7 @@ Link proof 签名载荷：`"{installation_id}:{nonce}:v1/hosts/link"`（无 lead
 
 `Sqlite(SqlitePool)` 或 `Postgres(PgPool)`，通过 `AsStorePool` trait 抽象。
 
-**逻辑 schema SSOT（storage parity）**：两方言共享同一表集合、列名、FK 图与 CHECK 语义；仅类型编码与物理布局可不同（PG ENUM/JSONB/BOOLEAN、`durable_event_log` LIST 分区、`SKIP LOCKED` / advisory lock）。门禁：`cargo xtask lint-schema-parity` / `just schema-parity`。规格：`docs/superpowers/specs/backend-storage-parity-design.md`。
+**逻辑 schema SSOT（storage parity）**：两方言共享同一表集合、列名、FK 图与 CHECK 语义；仅类型编码与物理布局可不同（PG ENUM/JSONB/BOOLEAN、`durable_event_log` LIST 分区、`SKIP LOCKED` / advisory lock）。门禁：`cargo xtask lint-schema-parity` / `just schema-parity`。
 
 Migrations 为 latest-only 单一初始 schema（`sqlx::migrate!`）：
 - SQLite：`crates/minos-backend/migrations/sqlite/0001_initial.sql`（本地 `just backend` 默认）
@@ -269,7 +270,7 @@ Postgres 集成 smoke（默认 skip）：`MINOS_PG_TESTS=1 MINOS_DATABASE_URL=po
   3. 若 formal `agent_sessions` 不存在但 host 已 Link：用 chunk 上的 `conversation_id`（或 `host-local-session:{id}`）**自动登记** formal session（必要时 ensure 云端 group conversation），再 accept ingest
   4. **server** 用 `SessionTranslators`（`minos-ui-protocol::translate_*`）把 raw 投成 `UiEventMessage`，同步 formal turn/session 状态并 fanout；host 自带 `projection` 忽略
   4. 向 `agent_session:{id}` 的 `/ws/client` 订阅者 fanout `StreamEvent{kind: ui_event}`
-- 旧 envelope 路径的 peer-target 解析：`host_links` → 同 account 下 mobile/browser/desktop installations（带缓存；Host Link/unlink 时 invalidate）
+- peer-target 缓存（`host_links` → 同 account 下 client installations）仅用于辅助解析；Host Link/unlink 时 invalidate
 - `HostGapManifest` 落 `thread_sync_state` 后，backend 立即按 manifest range 通过同一条 host WS 发 `PullIngestRange`。
 - host 从本地 SQLite 读取 range 并回 `HostIngestPullResponse`；backend 持久化后只按连续 raw event 前缀发送 `PullAck`。
 - `agent_sessions.host_device_id` 为空时，新 handler 允许当前 host 认领该 session，避免 session 创建与 host 绑定之间的流式事件窗口丢失。
@@ -287,18 +288,18 @@ Postgres 集成 smoke（默认 skip）：`MINOS_PG_TESTS=1 MINOS_DATABASE_URL=po
 ```
 RuntimeShell           -- 拥有 AppContext、后台任务、集群监听
   └── AppContext       -- 组合所有服务
-        ├── SessionRegistry           -- 内存中的活跃 WS 会话
-        ├── SubscriptionManager       -- topic 订阅管理
-        ├── HostLinkService            -- 配对业务逻辑
-        ├── AuthUseCase               -- 认证业务逻辑
-        ├── IngestUseCase             -- 原始事件摄取
-        ├── RealtimeFanout            -- 事件扇出引擎
-        ├── ApprovalService           -- 审批请求处理
-        ├── HostCommandService        -- 持久化命令队列
-        ├── AgentSessionService       -- Agent 会话管理
-        ├── ProjectService            -- 项目 CRUD
-        ├── NotificationService       -- 推送通知
-        └── StoreHandle               -- 数据库连接池
+        ├── RealtimeConnectionRegistry -- 设备当前连接 / 同设备替换 / presence
+        ├── SubscriptionManager        -- topic 订阅管理
+        ├── HostLinkService            -- Host Link 业务逻辑
+        ├── AuthUseCase                -- 认证业务逻辑
+        ├── IngestUseCase              -- host raw 摄取 → StreamEvent
+        ├── RealtimeFanout             -- durable/stream 扇出引擎
+        ├── ApprovalService            -- 审批请求处理
+        ├── HostCommandService         -- 持久化命令队列
+        ├── AgentSessionService        -- Agent 会话管理
+        ├── ProjectService             -- 项目 CRUD
+        ├── NotificationService        -- 推送通知
+        └── StoreHandle                -- 数据库连接池
 ```
 
 ## 后台任务 (`src/jobs/`)

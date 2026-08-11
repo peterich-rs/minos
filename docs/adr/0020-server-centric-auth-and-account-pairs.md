@@ -5,7 +5,7 @@
 | Status | Accepted |
 | Date | 2026-05-01 |
 | Deciders | fannnzhang |
-| Supersedes | §12.2 ("Single device vs multi-device → single") of `docs/superpowers/specs/mobile-auth-and-agent-session-design.md`; partially supersedes §5.4 (dual-rail iOS auth) of same |
+| Supersedes | Earlier device-keyed pairing and dual-rail iOS-auth design |
 
 ## Context
 
@@ -83,7 +83,6 @@ server-centric model. Three observable consequences:
 
 ## Related
 
-- Implementation plan: `docs/superpowers/plans/11-server-centric-auth-and-pair.md`
-- Spec being partially superseded: `docs/superpowers/specs/mobile-auth-and-agent-session-design.md` (§12.2, §5.4)
+- The retired implementation plan and superseded working specification are intentionally not retained.
 - Prior pairing-related ADRs: `docs/adr/0014-backend-assembled-pairing-qr.md`, `docs/adr/0016-client-env-cloudflare-access.md`
 - **Bot participants (not human Accounts):** [0021-agent-as-conversation-bot-participant.md](0021-agent-as-conversation-bot-participant.md) — Agents are conversation bots; this ADR’s Account/Host split remains for humans vs machines.

@@ -10,9 +10,6 @@
 | 产品定位 | **Conversation 协作工作台**（Timeline 主舞台；Agent 为对话内 **bot 成员**；Session/Approval 为 Attention）。**account-first** 登录即绑定本机 Host 控制权。手机远程驱动 bot 依赖 **Host online**（`/ws/host`）；人类多端聊天依赖 **Account IM**（`/ws/client` + Hub）。见 [ADR 0021](adr/0021-agent-as-conversation-bot-participant.md) |
 | 当前阶段 | **Daemon-backed**：Tauri 嵌 daemon。**根门禁 account-first**：`hydrateAuth` → 无 session 则 `LoginPage`。登录后 `ensureCloudConnection`（host link + dial `/ws/host`）。**双角色**：Account UI → `/ws/client` 发/收 Hub 消息；daemon → `/ws/host` 作 bot runtime。**Online 组合**：主状态 = Account IM sync（`accountSyncStatus` / `/ws/client`）；次状态 = Host readiness（`cloudStatus` / `cloudOnline`）。禁止仅 Host live 显示可发送 Online。无 Link/Unlink 主路径。Hub `conversation_id` 透传 Host（禁止假 Direct session） |
 | 视觉 | 暖色多栏（参考 `res/desktop.jpeg` 气质，非客服 Inbox 语义） |
-| 产品 spec | [2026-07-18-desktop-product-experience.md](superpowers/specs/2026-07-18-desktop-product-experience.md) |
-| 状态拆分 spec | [2026-07-21-desktop-state-by-consumption.md](superpowers/specs/2026-07-21-desktop-state-by-consumption.md)（**P0–P4 done**；P5 cleanup reviewed；编码入口 §18） |
-| 状态 review | [2026-07-22-desktop-state-p0-p4-review.md](superpowers/reviews/2026-07-22-desktop-state-p0-p4-review.md) |
 | Buzz 借鉴清单 | [desktop-buzz-reference.md](./desktop-buzz-reference.md)（UI / 架构 / 组件 / 逻辑可复刻项与 P0–P2 路线图） |
 
 ## 标识命名（全栈约定）
@@ -212,7 +209,7 @@ apps/desktop/
         cloud-digest-cache.ts      # Hub list digests: hydrate once, live patchOne
         conversation-list-merge.ts # daemon rows ∥ Hub digests (isCloudImMode ≠ host-linked)
         im-cloud-bridge.ts         # auth → realtime → timeline + rail digest patch
-        # 协作气泡：docs/superpowers/specs/2026-08-02-hub-collaboration-message-ssot.md
+        # 协作气泡：Hub 是唯一权威，Desktop 只维护投影与 Outbox
         supabase.ts              # optional Supabase email/password IdP
         mock-data.ts
         toast.ts                 # sonner wrappers
@@ -423,7 +420,7 @@ minos_local_read_session_raw_history / subscribe_ingest
 | Raw(approval/*) | `approval` | 审批卡 |
 | Raw(其它) | 丢弃 | 不进 timeline |
 
-**Conversation 主时间线**：Linked 会话以 **Hub 协作气泡** 为 SSOT；本地 daemon `chat_messages` 是工作台投影（tool/git 等），**不是**协作用户消息的第二写权威。`sendMessage`：optimistic `sending` → Account Outbox `AppendMessage` → **仅 ChatSendAck / durable echo 后** `sent`（`message_seq` 来自 Hub）；可选再投影到本地 daemon。禁止本地 append 成功即标 `sent`。Mobile `client_live` 同理。见 [Hub 协作消息 SSOT](superpowers/specs/2026-08-02-hub-collaboration-message-ssot.md) 与 [IM Reliability](superpowers/specs/2026-08-03-im-reliability-program/README.md)。  
+**Conversation 主时间线**：Linked 会话以 **Hub 协作气泡** 为 SSOT；本地 daemon `chat_messages` 是工作台投影（tool/git 等），**不是**协作用户消息的第二写权威。`sendMessage`：optimistic `sending` → Account Outbox `AppendMessage` → **仅 ChatSendAck / durable echo 后** `sent`（`message_seq` 来自 Hub）；可选再投影到本地 daemon。禁止本地 append 成功即标 `sent`。Mobile `client_live` 同理。消息同步与投递不变量见 [architecture-messaging.md](architecture-messaging.md)。
 **Session transcript** 仍只认 Host（user / assistant / tool / reasoning），**不含**把全过程 tool 流水写进协作气泡——与 TUI 分层一致。
 
 ### Conversation timeline（messenger 气泡）
@@ -519,7 +516,7 @@ Sessions 主区是 **Grok-style 日志 transcript** + 右侧 **session summary**
 | `branch` / `worktree_path` | **创建时** git 快照 | 只读 chip；不跟随后续 checkout |
 | Board 列 | 派生，非独立任务系统 | `done` 优先；`needs_you` 来自 suspended/approval 运行态（progress 仍为 `in_progress`） |
 
-新建会话：`ProjectHeader` → **Create conversation** 弹窗（对标 Buzz create-channel）配置 title / optional priority / **bot roster**。终态 roster 引用 **Hub 全局 bot `agent_id`**（数字肉身在 Hub；进群 = membership only，不 per-conversation 新建 bot）。本地 daemon 路径仍可写 `conversation_agent_members` 作 Host workbench，但多端协作身份以 Hub 为准（[global-bot-identity-design](superpowers/specs/global-bot-identity-design.md)）。**成员资格是 @mention / start 的 SSOT**：空 roster 时 picker 为空且 send 拒绝；仅 roster 内 bot（及其 open session）可被 @；非成员返回错误。创建时**不**预启动 session（懒启动：首次 @ 或 bare send 再 start / inbox 投递）。从 roster 移除只删 membership 并关闭该 bot 在本 conversation 的悬挂 sessions（`roster_removed`）；**不**删除全局 bot 身份。
+新建会话：`ProjectHeader` → **Create conversation** 弹窗（对标 Buzz create-channel）配置 title / optional priority / **bot roster**。终态 roster 引用 **Hub 全局 bot `agent_id`**（数字肉身在 Hub；进群 = membership only，不 per-conversation 新建 bot）。本地 daemon 路径仍可写 `conversation_agent_members` 作 Host workbench，但多端协作身份以 Hub 为准。**成员资格是 @mention / start 的 SSOT**：空 roster 时 picker 为空且 send 拒绝；仅 roster 内 bot（及其 open session）可被 @；非成员返回错误。创建时**不**预启动 session（懒启动：首次 @ 或 bare send 再 start / inbox 投递）。从 roster 移除只删 membership 并关闭该 bot 在本 conversation 的悬挂 sessions（`roster_removed`）；**不**删除全局 bot 身份。
 
 ### Agent 运行态与审批（Desktop 缺口修复）
 
