@@ -138,6 +138,26 @@ export function saveTopicCursors(
   }
 }
 
+/** Drop all Hub topic cursors (account leave — never resume under another account). */
+export function clearAllTopicCursors(
+  storage:
+    | (Pick<Storage, "removeItem"> & Partial<Pick<Storage, "setItem">>)
+    | null
+    | undefined = defaultStorage(),
+): void {
+  if (!storage) return;
+  try {
+    storage.removeItem?.(CLOUD_CURSOR_STORAGE_KEY);
+    storage.removeItem?.(LEGACY_CLOUD_CURSOR_STORAGE_KEY);
+  } catch {
+    try {
+      storage.setItem?.(CLOUD_CURSOR_STORAGE_KEY, "{}");
+    } catch {
+      /* quota / private mode */
+    }
+  }
+}
+
 function defaultStorage(): Storage | null {
   try {
     if (typeof localStorage === "undefined") return null;

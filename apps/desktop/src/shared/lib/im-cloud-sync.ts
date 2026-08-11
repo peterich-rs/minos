@@ -65,6 +65,8 @@ const MAX_PROJECTED_CACHE = 4000;
 /** Per-lane drain chains — different conversations / intent classes parallelize. */
 const laneChains = new Map<string, Promise<void>>();
 let outboxWorkerTimer: ReturnType<typeof setTimeout> | null = null;
+/** Bumped on account leave so scheduled drains cannot flush under a new session. */
+let outboxWorkerGeneration = 0;
 
 /** Last successful reaction toggle payload by client op id (for waiters). */
 const reactionResults = new Map<
@@ -86,10 +88,20 @@ const reactionResults = new Map<
   }
 >();
 
-function cloudAuth(): { deviceId: string; accessToken: string } | null {
+function cloudAuth(): {
+  deviceId: string;
+  accessToken: string;
+  accountId: string;
+} | null {
   const { deviceId, session } = useAccountStore.getState();
-  if (!session?.accessToken?.trim()) return null;
-  return { deviceId, accessToken: session.accessToken };
+  const accessToken = session?.accessToken?.trim() ?? "";
+  const accountId = session?.accountId?.trim() ?? "";
+  if (!accessToken || !accountId) return null;
+  return { deviceId, accessToken, accountId };
+}
+
+function currentOutboxAccountId(): string {
+  return cloudAuth()?.accountId ?? "";
 }
 
 function normalizeRuntime(runtime: string | null | undefined): string | null {
@@ -528,13 +540,14 @@ export async function syncReactionToggleToCloud(input: {
   if (await isAcked(clientOpId)) {
     return reactionResults.get(clientOpId) ?? null;
   }
-  if (!cloudAuth()) {
+  const auth = cloudAuth();
+  if (!auth) {
     throw new Error("not authenticated");
   }
-
   const entry = await enqueueReactionToggle({
     conversationId,
     clientMessageId: clientOpId,
+    accountId: auth.accountId,
     text: JSON.stringify({ messageId, emoji }),
   });
   if (entry.status === "acked" || (await isAcked(clientOpId))) {
@@ -585,7 +598,13 @@ export async function syncApprovalResolve(input: {
       ? "hub"
       : "daemon");
 
-  if (route === "hub" && !cloudAuth()) {
+  const auth = cloudAuth();
+  if (route === "hub" && !auth) {
+    throw new Error("not authenticated");
+  }
+  const accountId =
+    auth?.accountId ?? useAccountStore.getState().session?.accountId?.trim() ?? "";
+  if (!accountId) {
     throw new Error("not authenticated");
   }
 
@@ -593,6 +612,7 @@ export async function syncApprovalResolve(input: {
     // Scope key for local storage only (not a Hub conversation id).
     conversationId: `approval-session:${sessionId}`,
     clientMessageId: clientOpId,
+    accountId,
     text: JSON.stringify({
       requestId,
       sessionId,
@@ -642,6 +662,7 @@ export async function syncUserMessageToCloud(input: {
   await enqueueUserMessage({
     conversationId: input.conversationId,
     clientMessageId: messageId,
+    accountId: auth.accountId,
     text,
     title: input.title,
     replyToMessageId: input.replyToMessageId,
@@ -665,6 +686,11 @@ async function flushOutboxEntry(
 ): Promise<void> {
   if (entry.status === "acked") return;
   if (await isAcked(entry.clientMessageId)) return;
+  const auth = cloudAuth();
+  if (!auth || entry.accountId.trim() !== auth.accountId) {
+    // Never send under a different (or missing) account identity.
+    return;
+  }
 
   await markInflight(entry.clientMessageId);
   try {
@@ -716,8 +742,10 @@ async function drainLaneKey(laneKey: string): Promise<void> {
   );
   await prev.catch(() => undefined);
   try {
+    const accountId = currentOutboxAccountId();
+    if (!accountId) return;
     // Re-list so we only take this lane's current due head-run.
-    const lanes = await listDuePendingLanes();
+    const lanes = await listDuePendingLanes(Date.now(), accountId);
     const lane = lanes.find(
       (l) => l[0] != null && outboxLaneKey(l[0]) === laneKey,
     );
@@ -739,7 +767,9 @@ async function drainLaneKey(laneKey: string): Promise<void> {
  * Public sync APIs must only enqueue + wait — never call flushOutboxEntry.
  */
 export async function flushImOutbox(): Promise<void> {
-  const lanes = await listDuePendingLanes();
+  const accountId = currentOutboxAccountId();
+  if (!accountId) return;
+  const lanes = await listDuePendingLanes(Date.now(), accountId);
   if (lanes.length === 0) return;
   await Promise.all(
     lanes.map(async (lane) => {
@@ -841,6 +871,7 @@ export async function syncAgentResultToCloud(input: {
   await enqueueAgentResult({
     conversationId,
     clientMessageId: messageId,
+    accountId: auth.accountId,
     text,
     agentId,
     agentSessionId: sessionId,
@@ -892,19 +923,33 @@ export async function projectMissingLocalAgentResultsToCloud(
 /** Schedule a background outbox drain until no pending rows remain. */
 export function scheduleOutboxWorker(): void {
   if (outboxWorkerTimer != null) return;
+  const gen = outboxWorkerGeneration;
   outboxWorkerTimer = setTimeout(() => {
     outboxWorkerTimer = null;
+    if (gen !== outboxWorkerGeneration) return;
     void (async () => {
+      if (gen !== outboxWorkerGeneration) return;
+      const accountId = currentOutboxAccountId();
+      if (!accountId) return;
       const now = Date.now();
-      const dueNow = await listDuePending(now);
-      const nextAt = await earliestPendingAttemptAt(now);
+      const dueNow = await listDuePending(now, accountId);
+      const nextAt = await earliestPendingAttemptAt(now, accountId);
       if (dueNow.length === 0 && nextAt == null) return;
+      if (gen !== outboxWorkerGeneration) return;
       if (dueNow.length === 0 && nextAt != null) {
         const delay = Math.max(50, Math.min(nextAt - Date.now(), 5 * 60_000));
+        if (outboxWorkerTimer != null) return;
         outboxWorkerTimer = setTimeout(() => {
           outboxWorkerTimer = null;
+          if (gen !== outboxWorkerGeneration) return;
           void flushImOutbox().then(async () => {
-            if ((await earliestPendingAttemptAt()) != null) {
+            if (gen !== outboxWorkerGeneration) return;
+            if (
+              (await earliestPendingAttemptAt(
+                Date.now(),
+                currentOutboxAccountId(),
+              )) != null
+            ) {
               scheduleOutboxWorker();
             }
           });
@@ -912,27 +957,60 @@ export function scheduleOutboxWorker(): void {
         return;
       }
       await flushImOutbox();
-      if ((await earliestPendingAttemptAt()) != null) {
+      if (gen !== outboxWorkerGeneration) return;
+      if (
+        (await earliestPendingAttemptAt(
+          Date.now(),
+          currentOutboxAccountId(),
+        )) != null
+      ) {
         scheduleOutboxWorker();
       }
     })();
   }, 50);
 }
 
+/** Stop background outbox drain (account leave). */
+export function stopImOutboxWorker(): void {
+  outboxWorkerGeneration += 1;
+  if (outboxWorkerTimer != null) {
+    clearTimeout(outboxWorkerTimer);
+    outboxWorkerTimer = null;
+  }
+}
+
 /** Start background outbox drain (call once when account session is ready). */
 export function startImOutboxWorker(): void {
+  const gen = outboxWorkerGeneration;
   void (async () => {
     await initImOutbox();
+    if (gen !== outboxWorkerGeneration) return;
     await reclaimStaleInflight();
+    if (gen !== outboxWorkerGeneration) return;
     await flushImOutbox();
-    if ((await earliestPendingAttemptAt()) != null) {
+    if (gen !== outboxWorkerGeneration) return;
+    if (
+      (await earliestPendingAttemptAt(
+        Date.now(),
+        currentOutboxAccountId(),
+      )) != null
+    ) {
       scheduleOutboxWorker();
     }
   })();
 }
 
-/** Clear process caches (tests / account switch). */
-export function resetImCloudSyncStateForTests(): void {
+/** Clear process caches (account leave / tests). */
+export function resetImCloudSyncState(): void {
+  stopImOutboxWorker();
   runtimeAgentIdCache.clear();
   projectedMessageIds.clear();
+  reactionResults.clear();
+  userMessageAcks.clear();
+  laneChains.clear();
+}
+
+/** @deprecated Use resetImCloudSyncState */
+export function resetImCloudSyncStateForTests(): void {
+  resetImCloudSyncState();
 }

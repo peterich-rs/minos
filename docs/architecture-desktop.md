@@ -263,6 +263,9 @@ apps/desktop/
 | 文本缩放 | `useWebviewZoomShortcuts` 挂在 **`App`**（boot + shell 始终生效）：⌘/Ctrl ±/0 调 `documentElement` rem（`minos:text-scale`）；Tauri webview zoom 固定为 1 |
 | Daemon 连接反馈 | `ConnectionToasts` 监听 `connection.connected` 边沿；**disconnect 防抖 2s**（`connection-toast-policy`）。持久侧栏卡 `SidebarConnectionCard`（同防抖 + dismiss 至本 episode；Retry → bootstrap / Host） |
 | Workspace 边界 reset | `resetWorkspaceModuleState`：bootstrap wipe / mock 路径统一清 timers、inflight、event bridge、reactions、composer ephemeral。**Project 切换不调用**。新模块单例必须登记于此 |
+| Account 边界 leave | `leaveAccountScope`：登出 / 换号 / auth-invalid 唯一入口。停 IM bridge + outbox worker generation、invalidate digest、清 topic cursors、`minosQueryClient.clear`、empty workspace（`workspaceAccountId=null`/`bootEpoch=0`）、清 UI 选中态、best-effort `daemon_host_clear_credential`。bootstrap `alreadyReady` 要求 `workspaceAccountId === session.accountId` |
+| Outbox 账户归属 | `ImOutboxEntry.accountId` 不可变；`listDuePending*` 只领取当前账户；空 accountId 隔离永不发送 |
+| Host 在线归属 | `hostCredentialAccountId` 与 session 一致才可 `cloudStatus=online` / 复用 hit_；换号 force re-register |
 | Inspector 辅面板 | `AuxiliaryPanel`：`split`（resizable）/ `rail` / `overlay`（&lt;1100px 浮层+backdrop）；`SessionInspector` 统一壳 |
 | Motion tokens | `modalMotion` / `popoverSurface` 统一 Dialog / Popover / Dropdown enter-exit |
 | Modal backdrop | `modalBackdrop`：`backdrop-blur-[10px]` + `bg-black/[0.04] dark:bg-black/25`（偏透毛玻璃，能看清背景结构；禁止 `bg-ink/…` 当 scrim） |

@@ -19,7 +19,8 @@ use minos_protocol::local_rpc::{
 use minos_protocol::{
     AppendConversationMessageParams, ApprovalDecisionRequest, CreateConversationParams,
     CreateProjectRequest, HostApplyLinkTokenParams, HostApplyLinkTokenResponse,
-    HostPrepareLinkResponse, HostSignLinkProofParams, HostSignLinkProofResponse, ListClisResponse,
+    HostClearCredentialResponse, HostPrepareLinkResponse, HostSignLinkProofParams,
+    HostSignLinkProofResponse, ListClisResponse,
     ListConversationAgentSessionsParams, ListConversationMessagesParams, ListConversationsParams,
     ListProjectsResponse, LocalConversationMessage, LocalConversationSummary, LocalReactionGroup,
     ProjectSummary, ReadSessionParams, RemoveConversationAgentParams, SendUserMessageRequest,
@@ -401,6 +402,12 @@ pub struct HostSignLinkProofDto {
 #[serde(rename_all = "camelCase")]
 pub struct HostApplyLinkTokenDto {
     pub linked: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostClearCredentialDto {
+    pub cleared: bool,
 }
 
 pub struct DaemonBridge {
@@ -1274,6 +1281,18 @@ impl DaemonBridge {
             .context("minos_local_host_apply_link_token")?;
         Ok(HostApplyLinkTokenDto {
             linked: response.linked,
+        })
+    }
+
+    /// Drop local host credential so the next account cannot inherit `/ws/host`.
+    pub async fn host_clear_credential(&self) -> Result<HostClearCredentialDto> {
+        let client = self.client().await?;
+        let response: HostClearCredentialResponse = client
+            .request("minos_local_host_clear_credential", ArrayParams::new())
+            .await
+            .context("minos_local_host_clear_credential")?;
+        Ok(HostClearCredentialDto {
+            cleared: response.cleared,
         })
     }
 

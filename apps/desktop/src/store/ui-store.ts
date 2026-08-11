@@ -48,6 +48,11 @@ type UiState = {
    * so navigation restore still works after reconnect.
    */
   clearWorkspaceEphemeralUi: () => void;
+  /**
+   * Clear every account-scoped navigation pointer. Used on logout / account switch
+   * so B never restores A's project/conversation selection.
+   */
+  clearAccountScopedUi: () => void;
 };
 
 export const useUiStore = create<UiState>()(
@@ -166,6 +171,16 @@ export const useUiStore = create<UiState>()(
       clearWorkspaceEphemeralUi: () =>
         set({
           selectedSessionId: null,
+          draftByConversationId: {},
+          replyToMessageIdByConversation: {},
+          commandPaletteOpen: false,
+        }),
+      clearAccountScopedUi: () =>
+        set({
+          projectId: "",
+          conversationId: null,
+          selectedSessionId: null,
+          lastConversationByProject: {},
           draftByConversationId: {},
           replyToMessageIdByConversation: {},
           commandPaletteOpen: false,

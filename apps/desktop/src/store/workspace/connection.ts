@@ -45,11 +45,16 @@ export function createConnectionActions(
     if (existing) {
       return existing;
     }
+    const { useAccountStore } = await import("@/store/account-store");
+    const sessionAccountId =
+      useAccountStore.getState().session?.accountId?.trim() ?? null;
     const alreadyReady =
       !get().booting &&
       get().connection?.connected &&
       get().source === "daemon" &&
-      get().bootEpoch > 0;
+      get().bootEpoch > 0 &&
+      get().workspaceAccountId != null &&
+      get().workspaceAccountId === sessionAccountId;
     if (alreadyReady) {
       return;
     }
@@ -156,11 +161,17 @@ export function createConnectionActions(
           reactions: "skip",
           clearUiEphemeral: false,
         });
+        const { useAccountStore: accountStore } = await import(
+          "@/store/account-store"
+        );
+        const readyAccountId =
+          accountStore.getState().session?.accountId?.trim() ?? null;
         set({
           booting: false,
           bootPhase: "Ready",
           bootProgress: 100,
           bootEpoch: get().bootEpoch + 1,
+          workspaceAccountId: readyAccountId,
           source: "daemon",
           connection,
           loading: false,

@@ -115,6 +115,8 @@ struct Inner {
     out_tx: mpsc::Sender<ClientFrame>,
     live_tx: mpsc::Sender<ClientFrame>,
     backfill_tx: mpsc::Sender<ClientFrame>,
+    /// Link-state publisher so account leave can force `/ws/host` offline.
+    link_tx: watch::Sender<RelayLinkState>,
 }
 
 pub struct RelayClient {
@@ -190,7 +192,7 @@ impl RelayClient {
             secret: secret_store.clone(),
             secret_notify: secret_notify.clone(),
             backend_url: backend_url.clone(),
-            link_tx,
+            link_tx: link_tx.clone(),
             peer_tx: peer_tx.clone(),
             out_tx: out_tx.clone(),
             out_rx,
@@ -223,6 +225,7 @@ impl RelayClient {
             out_tx,
             live_tx,
             backfill_tx,
+            link_tx,
         });
 
         (Arc::new(Self { inner }), link_rx, peer_rx)
@@ -277,6 +280,24 @@ impl RelayClient {
             "host installation token applied for Host Link; waking /ws/host dialer"
         );
         Ok(minos_protocol::HostApplyLinkTokenResponse { linked: true })
+    }
+
+    /// Drop the local host installation token and force `/ws/host` offline.
+    ///
+    /// Desktop calls this on account leave so a subsequent login cannot inherit
+    /// the previous account's host credential or online bit.
+    pub fn clear_link_token(&self) -> Result<minos_protocol::HostClearCredentialResponse, MinosError> {
+        if let Ok(mut guard) = self.inner.secret.lock() {
+            *guard = None;
+        }
+        crate::device_secret_store::delete()?;
+        let _ = self.inner.link_tx.send(RelayLinkState::Disconnected);
+        self.inner.secret_notify.notify_waiters();
+        tracing::info!(
+            target: "minos_daemon::relay_client",
+            "host installation token cleared; /ws/host dialer disabled until re-link"
+        );
+        Ok(minos_protocol::HostClearCredentialResponse { cleared: true })
     }
 
     /// Back-compat helper for callers that still think in terms of a

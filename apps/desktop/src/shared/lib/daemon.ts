@@ -314,6 +314,9 @@ export const daemonApi = {
     call<{ linked: boolean }>("daemon_host_apply_link_token", {
       hostInstallationToken,
     }),
+  /** Drop local hit_ so account leave cannot inherit previous host dial. */
+  hostClearCredential: () =>
+    call<{ cleared: boolean }>("daemon_host_clear_credential"),
   createConversation: (
     projectId: string,
     title: string,

@@ -1,7 +1,9 @@
 //! Tauri commands for same-account Host Link (D02).
 
 use crate::app_state::AppState;
-use crate::daemon::{HostApplyLinkTokenDto, HostPrepareLinkDto, HostSignLinkProofDto};
+use crate::daemon::{
+    HostApplyLinkTokenDto, HostClearCredentialDto, HostPrepareLinkDto, HostSignLinkProofDto,
+};
 use tauri::State;
 
 #[tauri::command]
@@ -36,6 +38,17 @@ pub async fn daemon_host_apply_link_token(
     state
         .daemon
         .host_apply_link_token(host_installation_token)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn daemon_host_clear_credential(
+    state: State<'_, AppState>,
+) -> Result<HostClearCredentialDto, String> {
+    state
+        .daemon
+        .host_clear_credential()
         .await
         .map_err(|e| e.to_string())
 }

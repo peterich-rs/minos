@@ -19,7 +19,10 @@ import {
   removeMessageFromTimeline,
   upsertCloudMessageIntoTimeline,
 } from "@/shared/lib/cloud-timeline";
-import { startImOutboxWorker } from "@/shared/lib/im-cloud-sync";
+import {
+  startImOutboxWorker,
+  stopImOutboxWorker,
+} from "@/shared/lib/im-cloud-sync";
 import {
   pullCloudConversationMessagePage,
   pullCloudForwardGap,
@@ -658,6 +661,7 @@ export function ensureImCloudBridge(): void {
 }
 
 export function stopImCloudBridge(): void {
+  stopImOutboxWorker();
   session?.stop();
   session = null;
   startedForToken = null;

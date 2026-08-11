@@ -38,16 +38,22 @@ type DigestDelta = Partial<
 
 let digestsById: Map<string, CloudConversationDigest> = new Map();
 let hydrated = false;
+/** Account that owns the current hydrate; mismatch ⇒ treat as cold. */
+let ownerAccountId: string | null = null;
 
 export const cloudDigestCache = {
   /** Sole HTTP fill path. Replaces all digests. */
-  hydrate(digests: readonly CloudConversationDigest[]): void {
+  hydrate(
+    digests: readonly CloudConversationDigest[],
+    accountId?: string | null,
+  ): void {
     digestsById = new Map(
       digests
         .filter((d) => d.conversationId.trim())
         .map((d) => [d.conversationId, { ...d }]),
     );
     hydrated = true;
+    ownerAccountId = accountId?.trim() || null;
   },
 
   /** Live Account* / mark-read writer after hydrate. */
@@ -90,10 +96,21 @@ export const cloudDigestCache = {
   invalidate(): void {
     digestsById = new Map();
     hydrated = false;
+    ownerAccountId = null;
   },
 
   isHydrated(): boolean {
     return hydrated;
+  },
+
+  /** True only when cache is warm for this account. */
+  isHydratedFor(accountId: string): boolean {
+    const id = accountId.trim();
+    return hydrated && !!id && ownerAccountId === id;
+  },
+
+  ownerAccountId(): string | null {
+    return ownerAccountId;
   },
 
   get(conversationId: string): CloudConversationDigest | undefined {
@@ -108,5 +125,6 @@ export const cloudDigestCache = {
   _resetForTests(): void {
     digestsById = new Map();
     hydrated = false;
+    ownerAccountId = null;
   },
 };

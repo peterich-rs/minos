@@ -72,6 +72,12 @@ export type WorkspaceState = {
    */
   bootEpoch: number;
   /**
+   * Account that last owned this workspace data plane.
+   * Null after leaveAccountScope; bootstrap alreadyReady requires match with
+   * the current session accountId.
+   */
+  workspaceAccountId: string | null;
+  /**
    * True when Tauri push subscriptions (daemon://*) are active.
    * Live UI should prefer events over quiet poll intervals.
    */

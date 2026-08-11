@@ -79,6 +79,11 @@ export type ImOutboxEntry = {
   kind: OutboxKind;
   conversationId: string;
   clientMessageId: string;
+  /**
+   * Immutable owner account at enqueue. Empty/missing rows are quarantined and
+   * never claimed by any account's worker.
+   */
+  accountId: string;
   text: string;
   title?: string | null;
   replyToMessageId?: string | null;
@@ -103,6 +108,7 @@ type ImOutboxWire = {
   kind: string;
   conversationId: string;
   clientMessageId: string;
+  accountId?: string | null;
   text: string;
   title?: string | null;
   replyToMessageId?: string | null;
@@ -160,6 +166,7 @@ function entryToWire(e: ImOutboxEntry): ImOutboxWire {
     kind: e.kind,
     conversationId: e.conversationId,
     clientMessageId: e.clientMessageId,
+    accountId: e.accountId || "",
     text: e.text,
     title: e.title ?? null,
     replyToMessageId: e.replyToMessageId ?? null,
@@ -184,6 +191,7 @@ function wireToEntry(w: ImOutboxWire): ImOutboxEntry {
     kind: w.kind as OutboxKind,
     conversationId: w.conversationId,
     clientMessageId: w.clientMessageId,
+    accountId: typeof w.accountId === "string" ? w.accountId.trim() : "",
     text: w.text,
     title: w.title,
     replyToMessageId: w.replyToMessageId,
@@ -387,10 +395,20 @@ export function classifyOutboxFailure(error: string): OutboxFailureClass {
   return "transient";
 }
 
+function ownedByAccount(
+  entry: Pick<ImOutboxEntry, "accountId">,
+  accountId: string,
+): boolean {
+  const aid = accountId.trim();
+  const owner = entry.accountId?.trim() ?? "";
+  return !!aid && !!owner && owner === aid;
+}
+
 async function upsertPendingEntry(input: {
   kind: OutboxKind;
   conversationId: string;
   clientMessageId: string;
+  accountId: string;
   text: string;
   title?: string | null;
   replyToMessageId?: string | null;
@@ -404,7 +422,11 @@ async function upsertPendingEntry(input: {
   return withMutation(async () => {
     const clientMessageId = input.clientMessageId.trim();
     const conversationId = input.conversationId.trim();
+    const accountId = input.accountId.trim();
     const text = input.text.trim();
+    if (!accountId) {
+      throw new Error("outbox enqueue requires accountId");
+    }
     const t = nowMs();
     const mentions =
       input.mentions && input.mentions.length > 0
@@ -418,9 +440,14 @@ async function upsertPendingEntry(input: {
       if (prev.status === "acked") {
         return prev;
       }
+      // Immutable owner: never reassign a row to another account.
+      if (prev.accountId?.trim() && prev.accountId.trim() !== accountId) {
+        return prev;
+      }
       const next: ImOutboxEntry = {
         ...prev,
         kind: input.kind,
+        accountId: prev.accountId?.trim() || accountId,
         text,
         title: input.title ?? prev.title,
         replyToMessageId: input.replyToMessageId ?? prev.replyToMessageId,
@@ -448,6 +475,7 @@ async function upsertPendingEntry(input: {
       kind: input.kind,
       conversationId,
       clientMessageId,
+      accountId,
       text,
       title: input.title,
       replyToMessageId: input.replyToMessageId,
@@ -475,6 +503,7 @@ async function upsertPendingEntry(input: {
 export async function enqueueUserMessage(input: {
   conversationId: string;
   clientMessageId: string;
+  accountId: string;
   text: string;
   title?: string | null;
   replyToMessageId?: string | null;
@@ -492,6 +521,7 @@ export async function enqueueUserMessage(input: {
 export async function enqueueAgentResult(input: {
   conversationId: string;
   clientMessageId: string;
+  accountId: string;
   text: string;
   agentId?: string | null;
   agentSessionId?: string | null;
@@ -502,6 +532,7 @@ export async function enqueueAgentResult(input: {
     kind: "agent_result",
     conversationId: input.conversationId,
     clientMessageId: input.clientMessageId,
+    accountId: input.accountId,
     text: input.text,
     agentId: input.agentId,
     agentSessionId: input.agentSessionId,
@@ -514,12 +545,14 @@ export async function enqueueAgentResult(input: {
 export async function enqueueReactionToggle(input: {
   conversationId: string;
   clientMessageId: string;
+  accountId: string;
   text: string;
 }): Promise<ImOutboxEntry> {
   return upsertPendingEntry({
     kind: "reaction_toggle",
     conversationId: input.conversationId,
     clientMessageId: input.clientMessageId,
+    accountId: input.accountId,
     text: input.text,
     messageSource: "client_live",
   });
@@ -528,12 +561,14 @@ export async function enqueueReactionToggle(input: {
 export async function enqueueApprovalResolve(input: {
   conversationId: string;
   clientMessageId: string;
+  accountId: string;
   text: string;
 }): Promise<ImOutboxEntry> {
   return upsertPendingEntry({
     kind: "approval_resolve",
     conversationId: input.conversationId,
     clientMessageId: input.clientMessageId,
+    accountId: input.accountId,
     text: input.text,
     messageSource: "client_live",
   });
@@ -646,10 +681,16 @@ export async function reclaimStaleInflight(now = nowMs()): Promise<number> {
   });
 }
 
-export async function listDuePending(now = nowMs()): Promise<ImOutboxEntry[]> {
+export async function listDuePending(
+  now = nowMs(),
+  accountId = "",
+): Promise<ImOutboxEntry[]> {
   await reclaimStaleInflight(now);
   return entries.filter(
-    (e) => e.status === "pending" && e.nextAttemptAt <= now,
+    (e) =>
+      e.status === "pending" &&
+      e.nextAttemptAt <= now &&
+      ownedByAccount(e, accountId),
   );
 }
 
@@ -665,11 +706,13 @@ export function compareOutboxFifo(a: ImOutboxEntry, b: ImOutboxEntry): number {
  */
 export async function listDuePendingLanes(
   now = nowMs(),
+  accountId = "",
 ): Promise<ImOutboxEntry[][]> {
   await reclaimStaleInflight(now);
   const byLane = new Map<string, ImOutboxEntry[]>();
   for (const e of entries) {
     if (e.status !== "pending" && e.status !== "inflight") continue;
+    if (!ownedByAccount(e, accountId)) continue;
     const key = outboxLaneKey(e);
     const list = byLane.get(key);
     if (list) list.push(e);
@@ -696,34 +739,39 @@ export async function listDuePendingLanes(
 
 export async function earliestPendingAttemptAt(
   now = nowMs(),
+  accountId = "",
 ): Promise<number | null> {
   await reclaimStaleInflight(now);
   let min: number | null = null;
   for (const e of entries) {
     if (e.status !== "pending") continue;
+    if (!ownedByAccount(e, accountId)) continue;
     if (min == null || e.nextAttemptAt < min) min = e.nextAttemptAt;
   }
   return min;
 }
 
-export async function listUnsynced(): Promise<ImOutboxEntry[]> {
+export async function listUnsynced(accountId = ""): Promise<ImOutboxEntry[]> {
   await ensureReady();
   return entries.filter(
     (e) =>
-      e.status === "pending" ||
-      e.status === "inflight" ||
-      e.status === "failed_terminal",
+      ownedByAccount(e, accountId) &&
+      (e.status === "pending" ||
+        e.status === "inflight" ||
+        e.status === "failed_terminal"),
   );
 }
 
 export async function listPendingForConversation(
   conversationId: string,
+  accountId = "",
 ): Promise<ImOutboxEntry[]> {
   await ensureReady();
   const cid = conversationId.trim();
   return entries.filter(
     (e) =>
       e.conversationId === cid &&
+      ownedByAccount(e, accountId) &&
       (e.status === "pending" || e.status === "inflight"),
   );
 }

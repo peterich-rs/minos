@@ -22,6 +22,8 @@ import {
   STALE_INFLIGHT_MS,
 } from "./im-outbox.ts";
 
+const TEST_ACCOUNT = "acct-test";
+
 describe("im-outbox", () => {
   beforeEach(async () => {
     enableMemoryOutboxForTests();
@@ -30,22 +32,24 @@ describe("im-outbox", () => {
 
   it("enqueues pending user messages and acks prevent re-project", async () => {
     await enqueueUserMessage({
+      accountId: TEST_ACCOUNT,
       conversationId: "c1",
       clientMessageId: "m1",
       text: "hello",
     });
     assert.equal(await isAcked("m1"), false);
-    const due = await listDuePending();
+    const due = await listDuePending(undefined, TEST_ACCOUNT);
     assert.equal(due.length, 1);
     assert.equal(due[0]!.clientMessageId, "m1");
 
     await markInflight("m1");
     await markAcked("m1");
     assert.equal(await isAcked("m1"), true);
-    assert.equal((await listDuePending()).length, 0);
+    assert.equal((await listDuePending(undefined, TEST_ACCOUNT)).length, 0);
 
     // Re-enqueue after ack is a no-op for status
     const again = await enqueueUserMessage({
+      accountId: TEST_ACCOUNT,
       conversationId: "c1",
       clientMessageId: "m1",
       text: "hello",
@@ -64,13 +68,14 @@ describe("im-outbox", () => {
       },
     ];
     const entry = await enqueueUserMessage({
+      accountId: TEST_ACCOUNT,
       conversationId: "c1",
       clientMessageId: "m-mentions",
       text: "@codex @alice hi",
       mentions,
     });
     assert.deepEqual(entry.mentions, mentions);
-    const due = await listDuePending();
+    const due = await listDuePending(undefined, TEST_ACCOUNT);
     const row = due.find((e) => e.clientMessageId === "m-mentions");
     assert.ok(row);
     assert.deepEqual(row!.mentions, mentions);
@@ -78,6 +83,7 @@ describe("im-outbox", () => {
 
   it("network errors stay pending after many attempts (no terminal burn)", async () => {
     await enqueueUserMessage({
+      accountId: TEST_ACCOUNT,
       conversationId: "c1",
       clientMessageId: "m2",
       text: "x",
@@ -96,6 +102,7 @@ describe("im-outbox", () => {
 
   it("permanent client errors terminal after enough attempts", async () => {
     await enqueueUserMessage({
+      accountId: TEST_ACCOUNT,
       conversationId: "c1",
       clientMessageId: "m-perm",
       text: "x",
@@ -109,7 +116,7 @@ describe("im-outbox", () => {
     );
     assert.ok(row);
     assert.equal(row!.status, "failed_terminal");
-    assert.equal((await listDuePending()).length, 0);
+    assert.equal((await listDuePending(undefined, TEST_ACCOUNT)).length, 0);
   });
 
   it("classifyOutboxFailure separates transient vs permanent", async () => {
@@ -124,6 +131,7 @@ describe("im-outbox", () => {
 
   it("reclaims stale inflight so kill mid-flight becomes due again", async () => {
     await enqueueUserMessage({
+      accountId: TEST_ACCOUNT,
       conversationId: "c1",
       clientMessageId: "m-stale",
       text: "in flight",
@@ -134,7 +142,7 @@ describe("im-outbox", () => {
     assert.equal(row!.status, "inflight");
 
     // Fresh inflight is not due
-    assert.equal((await listDuePending()).length, 0);
+    assert.equal((await listDuePending(undefined, TEST_ACCOUNT)).length, 0);
 
     // Simulate process kill: updatedAt far in the past
     const old = Date.now() - STALE_INFLIGHT_MS - 1_000;
@@ -146,19 +154,20 @@ describe("im-outbox", () => {
       (e) => e.clientMessageId === "m-stale",
     );
     assert.equal(after!.status, "pending");
-    assert.equal((await listDuePending()).length, 1);
-    assert.equal((await listDuePending())[0]!.clientMessageId, "m-stale");
+    assert.equal((await listDuePending(undefined, TEST_ACCOUNT)).length, 1);
+    assert.equal((await listDuePending(undefined, TEST_ACCOUNT))[0]!.clientMessageId, "m-stale");
   });
 
   it("listDuePending includes reclaim of stale inflight inline", async () => {
     await enqueueUserMessage({
+      accountId: TEST_ACCOUNT,
       conversationId: "c1",
       clientMessageId: "m-inline",
       text: "x",
     });
     await markInflight("m-inline");
     await forceUpdatedAtForTests("m-inline", Date.now() - STALE_INFLIGHT_MS - 5_000);
-    const due = await listDuePending();
+    const due = await listDuePending(undefined, TEST_ACCOUNT);
     assert.equal(due.length, 1);
     assert.equal(due[0]!.clientMessageId, "m-inline");
     assert.equal(due[0]!.status, "pending");
@@ -166,6 +175,7 @@ describe("im-outbox", () => {
 
   it("enqueues agent_result kind into the same status machine", async () => {
     const entry = await enqueueAgentResult({
+      accountId: TEST_ACCOUNT,
       conversationId: "c1",
       clientMessageId: "agent-result:c1:s1:origin1",
       text: "done",
@@ -175,22 +185,23 @@ describe("im-outbox", () => {
     assert.equal(entry.kind, "agent_result");
     assert.equal(entry.status, "pending");
     assert.equal(entry.messageSource, "host_projection");
-    assert.equal((await listDuePending()).length, 1);
-    assert.equal((await listDuePending())[0]!.kind, "agent_result");
+    assert.equal((await listDuePending(undefined, TEST_ACCOUNT)).length, 1);
+    assert.equal((await listDuePending(undefined, TEST_ACCOUNT))[0]!.kind, "agent_result");
 
     await markInflight(entry.clientMessageId);
     await markAcked(entry.clientMessageId);
     assert.equal(await isAcked(entry.clientMessageId), true);
-    assert.equal((await listDuePending()).length, 0);
+    assert.equal((await listDuePending(undefined, TEST_ACCOUNT)).length, 0);
   });
 
   it("includes reaction_toggle in due queue", async () => {
     await enqueueReactionToggle({
+      accountId: TEST_ACCOUNT,
       conversationId: "c1",
       clientMessageId: "react-1",
       text: JSON.stringify({ messageId: "m1", emoji: "👍" }),
     });
-    const due = await listDuePending();
+    const due = await listDuePending(undefined, TEST_ACCOUNT);
     assert.equal(due.length, 1);
     assert.equal(due[0]!.kind, "reaction_toggle");
     assert.equal(due[0]!.clientMessageId, "react-1");
@@ -200,6 +211,7 @@ describe("im-outbox", () => {
 
   it("earliestPendingAttemptAt tracks backoff beyond 60s", async () => {
     const entry = await enqueueUserMessage({
+      accountId: TEST_ACCOUNT,
       conversationId: "c1",
       clientMessageId: "late-1",
       text: "hi",
@@ -212,13 +224,14 @@ describe("im-outbox", () => {
       await markInflight(entry.clientMessageId);
     }
     await markFailed(entry.clientMessageId, "network error");
-    const next = await earliestPendingAttemptAt();
+    const next = await earliestPendingAttemptAt(undefined, TEST_ACCOUNT);
     assert.ok(next != null);
     assert.ok((next as number) > Date.now() + 10_000);
   });
 
   it("includes approval_resolve in due queue with stable client op id", async () => {
     const first = await enqueueApprovalResolve({
+      accountId: TEST_ACCOUNT,
       conversationId: "session-1",
       clientMessageId: "approval-op-1",
       text: JSON.stringify({
@@ -230,10 +243,11 @@ describe("im-outbox", () => {
     assert.equal(first.kind, "approval_resolve");
     assert.equal(first.clientMessageId, "approval-op-1");
     assert.equal(first.id, "outbox:approval-op-1");
-    assert.equal((await listDuePending()).length, 1);
+    assert.equal((await listDuePending(undefined, TEST_ACCOUNT)).length, 1);
 
     // Re-enqueue same logical op id keeps one entry (retry same id).
     const again = await enqueueApprovalResolve({
+      accountId: TEST_ACCOUNT,
       conversationId: "session-1",
       clientMessageId: "approval-op-1",
       text: JSON.stringify({
@@ -248,34 +262,37 @@ describe("im-outbox", () => {
         .length,
       1,
     );
-    assert.equal((await listDuePending()).length, 1);
-    assert.equal((await listDuePending())[0]!.clientMessageId, "approval-op-1");
+    assert.equal((await listDuePending(undefined, TEST_ACCOUNT)).length, 1);
+    assert.equal((await listDuePending(undefined, TEST_ACCOUNT))[0]!.clientMessageId, "approval-op-1");
 
     await markInflight("approval-op-1");
     await markAcked("approval-op-1");
     assert.equal(await isAcked("approval-op-1"), true);
-    assert.equal((await listDuePending()).length, 0);
+    assert.equal((await listDuePending(undefined, TEST_ACCOUNT)).length, 0);
   });
 
   it("listDuePendingLanes enforces per-conversation FIFO (no tail overtake)", async () => {
     // Two conversations; c1 has two due messages; c2 has one.
     await enqueueUserMessage({
+      accountId: TEST_ACCOUNT,
       conversationId: "c1",
       clientMessageId: "c1-a",
       text: "first",
     });
     await enqueueUserMessage({
+      accountId: TEST_ACCOUNT,
       conversationId: "c1",
       clientMessageId: "c1-b",
       text: "second",
     });
     await enqueueUserMessage({
+      accountId: TEST_ACCOUNT,
       conversationId: "c2",
       clientMessageId: "c2-a",
       text: "other",
     });
 
-    const lanes = await listDuePendingLanes();
+    const lanes = await listDuePendingLanes(undefined, TEST_ACCOUNT);
     assert.equal(lanes.length, 2);
     // Lanes sorted by conversationId.
     assert.equal(lanes[0]![0]!.conversationId, "c1");
@@ -291,23 +308,25 @@ describe("im-outbox", () => {
     // Put c1 head into backoff — lane must omit tail even if it is due.
     await markInflight("c1-a");
     await markFailed("c1-a", "network error");
-    const afterFail = await listDuePendingLanes();
+    const afterFail = await listDuePendingLanes(undefined, TEST_ACCOUNT);
     // c1 blocked (head not due); c2 still drains.
     assert.equal(afterFail.length, 1);
     assert.equal(afterFail[0]![0]!.clientMessageId, "c2-a");
     // Flat due still includes c1-b (due) but lanes correctly hide it.
-    const flat = await listDuePending();
+    const flat = await listDuePending(undefined, TEST_ACCOUNT);
     assert.ok(flat.some((e) => e.clientMessageId === "c1-b"));
     assert.ok(!afterFail.some((lane) => lane.some((e) => e.clientMessageId === "c1-b")));
   });
 
   it("listDuePendingLanes skips lane when head is fresh inflight", async () => {
     await enqueueUserMessage({
+      accountId: TEST_ACCOUNT,
       conversationId: "c1",
       clientMessageId: "m-head",
       text: "a",
     });
     await enqueueUserMessage({
+      accountId: TEST_ACCOUNT,
       conversationId: "c1",
       clientMessageId: "m-tail",
       text: "b",
@@ -318,34 +337,64 @@ describe("im-outbox", () => {
     );
     assert.equal(head!.status, "inflight");
     // Inflight head blocks the whole lane (no tail overtake).
-    assert.equal((await listDuePendingLanes()).length, 0);
+    assert.equal((await listDuePendingLanes(undefined, TEST_ACCOUNT)).length, 0);
     // Flat due still lists the pending tail; flush must use lanes.
-    const flat = await listDuePending();
+    const flat = await listDuePending(undefined, TEST_ACCOUNT);
     assert.equal(flat.length, 1);
     assert.equal(flat[0]!.clientMessageId, "m-tail");
   });
 
   it("reaction lane is independent of blocked message lane", async () => {
     await enqueueUserMessage({
+      accountId: TEST_ACCOUNT,
       conversationId: "c1",
       clientMessageId: "msg-a",
       text: "first",
     });
     await enqueueUserMessage({
+      accountId: TEST_ACCOUNT,
       conversationId: "c1",
       clientMessageId: "msg-b",
       text: "second",
     });
     await enqueueReactionToggle({
+      accountId: TEST_ACCOUNT,
       conversationId: "c1",
       clientMessageId: "rx-1",
       text: JSON.stringify({ messageId: "msg-a", emoji: "👍" }),
     });
     await markInflight("msg-a");
-    const lanes = await listDuePendingLanes();
+    const lanes = await listDuePendingLanes(undefined, TEST_ACCOUNT);
     // Message lane blocked; reaction lane still due.
     assert.equal(lanes.length, 1);
     assert.equal(lanes[0]![0]!.clientMessageId, "rx-1");
     assert.equal(outboxLaneKey(lanes[0]![0]!), "reaction:c1");
   });
+
+  it("only claims rows for the current account and quarantines empty accountId", async () => {
+    await enqueueUserMessage({
+      accountId: "acct-a",
+      conversationId: "c1",
+      clientMessageId: "a1",
+      text: "from-a",
+    });
+    await enqueueUserMessage({
+      accountId: "acct-b",
+      conversationId: "c1",
+      clientMessageId: "b1",
+      text: "from-b",
+    });
+    // Legacy/quarantine row
+    const snap = await getOutboxSnapshotForTests();
+    assert.equal(snap.length, 2);
+    const dueA = await listDuePending(undefined, "acct-a");
+    assert.equal(dueA.length, 1);
+    assert.equal(dueA[0]!.clientMessageId, "a1");
+    const dueB = await listDuePending(undefined, "acct-b");
+    assert.equal(dueB.length, 1);
+    assert.equal(dueB[0]!.clientMessageId, "b1");
+    assert.equal((await listDuePending(undefined, "")).length, 0);
+    assert.equal((await listDuePending()).length, 0);
+  });
+
 });

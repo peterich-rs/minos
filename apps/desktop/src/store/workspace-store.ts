@@ -51,6 +51,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       bootPhase: "Starting…",
       bootProgress: 5,
       bootEpoch: 0,
+      workspaceAccountId: null,
       livePush: false,
       source: "daemon",
       connection: null,
