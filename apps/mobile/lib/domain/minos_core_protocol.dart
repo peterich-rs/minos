@@ -24,24 +24,7 @@ abstract class MinosCoreProtocol {
   /// Optional display label for the active host (local preference).
   Future<String?> peerDisplayName();
 
-  /// Persist the active host display name. Pass `null` or empty to clear.
-  Future<void> setPeerDisplayName(String? name);
-
   Future<MyProfileResponse> myProfile();
-
-  Future<MyProfileResponse> setMinosId({required String minosId});
-
-  Future<List<UserSummary>> searchUsers({required String minosId});
-
-  Future<FriendRequestSummary> createFriendRequest({
-    required String targetMinosId,
-  });
-
-  Future<FriendRequestsResponse> friendRequests();
-
-  Future<FriendRequestSummary> acceptFriendRequest({required String requestId});
-
-  Future<FriendRequestSummary> rejectFriendRequest({required String requestId});
 
   Future<FriendsResponse> friends();
 
@@ -144,18 +127,6 @@ abstract class MinosCoreProtocol {
     required String clientOpId,
   });
 
-  /// Paged thread summaries for the paired agent-host.
-  Future<ListSessionsResponse> listThreads(ListSessionsParams params);
-
-  /// Recent agent sessions, optionally scoped to one social conversation.
-  Future<List<AgentSessionSummaryDto>> listAgentSessions({
-    String? conversationId,
-    int limit = 20,
-  });
-
-  /// Subscribe the live WebSocket to one agent session topic.
-  Future<void> subscribeAgentSession({required String sessionId});
-
   /// Open-chat live path (R3a): subscribe `conversation:{id}` for full messages.
   Future<void> subscribeConversation({required String conversationId});
 
@@ -168,39 +139,12 @@ abstract class MinosCoreProtocol {
     required int topicSeq,
   });
 
-  /// Translated UI event history for one session.
-  Future<ReadSessionResponse> readThread(ReadSessionParams params);
-
-  // ---- Projects ----
-
-  /// Create a new project on the daemon.
-  Future<CreateProjectResponse> createProject({
-    required String name,
-    required String workspaceSlug,
-    String? workspacePath,
-  });
-
-  /// List all projects on the daemon.
-  Future<ListProjectsResponse> listProjects();
-
-  /// Update a project's name.
-  Future<void> updateProject({required String projectId, required String name});
-
-  /// Delete a project.
-  Future<void> deleteProject({required String projectId});
-
-  /// List sessions within a project.
-  Future<ListProjectSessionsResponse> listProjectThreads({
-    required String projectId,
-    int limit = 50,
-    int? beforeTsMs,
-  });
-
   /// Hot stream of [ConnectionState] transitions, starting with the current
   /// value.
   Stream<ConnectionState> get connectionStates;
 
-  /// Hot stream of live [UiEventFrame]s fanned out by the backend.
+  /// Hot stream of live [UiEventFrame]s (snapshot/presence/control).
+  /// Not a product agent-transcript surface on Mobile.
   Stream<UiEventFrame> get uiEvents;
 
   /// Hot stream of live [SocialEventFrame]s fanned out by the backend.
@@ -224,30 +168,6 @@ abstract class MinosCoreProtocol {
   /// then wipe local auth state. Surfaces `Unauthenticated` on
   /// [authStates].
   Future<void> logout();
-
-  // ---- Agent dispatch ----
-
-  /// Send a follow-up user message to an existing agent session. The
-  /// `sessionId` is the session/session identifier.
-  Future<void> sendUserMessage({
-    required String sessionId,
-    required String text,
-  });
-
-  /// Pause an in-flight turn while keeping the session resumable.
-  Future<void> interruptThread({required String sessionId});
-
-  /// Close an agent session by its `session_id`. The multi-thread
-  /// `AgentManager` keys lifecycle operations on `session_id` rather than
-  /// implicitly on the single active session. Idempotent on the daemon side;
-  /// calling for an already-closed thread is a benign no-op.
-  Future<void> closeThread({required String sessionId});
-
-  /// Permanently delete a thread. Used exclusively for the swipe-to-delete
-  /// gesture in the session list. Semantically identical to [closeThread] on
-  /// the wire, but named distinctly so call-sites express intent: interrupt
-  /// pauses a session for later resume, while delete is a permanent close.
-  Future<void> deleteThread({required String sessionId});
 
   /// Detect CLI agents available on the paired runtime.
   Future<List<AgentDescriptor>> listClis();
@@ -286,28 +206,6 @@ abstract class MinosCoreProtocol {
   /// cached frame immediately on subscribe (per Rust watch-channel
   /// semantics), then every subsequent change.
   Stream<AuthStateFrame> get authStates;
-
-  /// Send an approval decision (accept/decline) for a pending approval
-  /// request. The [requestId] must match the original request's id, and
-  /// [sessionId] identifies the session the approval belongs to. The
-  /// [decision] is a JSON-encodable value matching the expected response
-  /// shape for the approval variant (command execution, file change, or
-  /// permissions).
-  Future<void> sendApprovalDecision({
-    required String requestId,
-    required String sessionId,
-    required Map<String, dynamic> decision,
-
-    /// Hub Intent Outbox id. Stable across retries of the same intent.
-    String? clientRequestId,
-  });
-
-  /// Submit answers for a pending opencode question request.
-  Future<void> respondOpencodeQuestion({
-    required String sessionId,
-    required String questionId,
-    required List<List<String>> answers,
-  });
 
   /// Re-open the WS using the durable pairing snapshot already loaded
   /// into the Rust core. Idempotent: a no-op when [currentConnectionState]

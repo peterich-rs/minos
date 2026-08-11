@@ -5,16 +5,13 @@ import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:flutter_list_view/flutter_list_view.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:minos/application/agent_activity_provider.dart';
 import 'package:minos/application/group_agent_provider.dart';
 import 'package:minos/application/minos_providers.dart';
 import 'package:minos/application/social_providers.dart';
-import 'package:minos/data/repositories/social_repository.dart';
 import 'package:minos/domain/agent_profile.dart';
 import 'package:minos/domain/group_member.dart';
 import 'package:minos/domain/message_sender_ext.dart';
 import 'package:minos/domain/social_message.dart';
-import 'package:minos/infrastructure/platform_int64.dart';
 import 'package:minos/src/rust/api/minos.dart';
 import 'package:minos/ui/core/widgets/error_feedback.dart';
 import 'package:minos/ui/core/widgets/minos_button.dart';
@@ -71,8 +68,9 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
     // Focused for unread / markRead (distinct from timeline window open).
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      ref.read(focusedSocialConversationIdProvider.notifier).state =
-          widget.conversationId;
+      ref
+          .read(focusedSocialConversationIdProvider.notifier)
+          .set(widget.conversationId);
     });
   }
 
@@ -82,7 +80,7 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
     // Clear focus if we still own it.
     final focused = ref.read(focusedSocialConversationIdProvider);
     if (focused == widget.conversationId) {
-      ref.read(focusedSocialConversationIdProvider.notifier).state = null;
+      ref.read(focusedSocialConversationIdProvider.notifier).clear();
     }
     _controller.dispose();
     _composerFocusNode.dispose();
@@ -97,12 +95,13 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
     }
     // Near top of ASC list → load older page (before_seq).
     if (_isNearTop()) {
-      final notifier = ref.read(
-        socialConversationProvider(widget.conversationId).notifier,
-      );
-      final st = ref.read(socialConversationProvider(widget.conversationId));
+      final st = ref.read(socialChatViewModelProvider(widget.conversationId));
       if (st.hasOlder && !st.loadingOlder) {
-        unawaited(notifier.loadOlder());
+        unawaited(
+          ref
+              .read(socialChatActionsProvider(widget.conversationId))
+              .loadOlder(),
+        );
       }
     }
   }
@@ -117,16 +116,12 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
     if (text.isEmpty) {
       return;
     }
-    final replyTarget = ref.read(
-      socialReplyMessageProvider(widget.conversationId),
-    );
     _controller.clear();
-    ref.read(socialReplyDraftProvider(widget.conversationId).notifier).clear();
     _jumpToBottom();
     try {
       await ref
-          .read(socialConversationProvider(widget.conversationId).notifier)
-          .sendMessage(text, replyToMessage: replyTarget);
+          .read(socialChatActionsProvider(widget.conversationId))
+          .send(text);
       if (!mounted) {
         return;
       }
@@ -155,7 +150,7 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
   /// Membership-first @ picker: only current conversation participants.
   Future<void> _showMentionPicker() async {
     final myAccountId = ref
-        .read(socialConversationProvider(widget.conversationId))
+        .read(socialChatViewModelProvider(widget.conversationId))
         .myAccountId;
     final participants = ref
         .read(groupMentionableMembersProvider(widget.conversationId))
@@ -301,7 +296,7 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
     _syncKeyboardInset(keyboardInsetBottom);
 
     ref.listen<SocialConversationState>(
-      socialConversationProvider(widget.conversationId),
+      socialChatViewModelProvider(widget.conversationId),
       (previous, next) {
         final previousCount = previous?.messages.length ?? 0;
         if (next.messages.length > previousCount &&
@@ -315,7 +310,7 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
     );
 
     final messageCount = ref.watch(
-      socialConversationProvider(
+      socialChatViewModelProvider(
         widget.conversationId,
       ).select((SocialConversationState s) => s.messages.length),
     );
@@ -448,7 +443,7 @@ class _ConversationTitle extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.minosColors;
-    final conversation = ref.watch(socialConversationProvider(conversationId));
+    final conversation = ref.watch(socialChatViewModelProvider(conversationId));
     final conversationSummary = _findConversationSummary(
       ref.watch(conversationsProvider).asData?.value,
       conversationId,
@@ -613,62 +608,6 @@ class _ConversationMessagePane extends ConsumerWidget {
   final String conversationId;
   final FlutterListViewController scrollController;
 
-  Future<void> _openAgentSession(
-    BuildContext context,
-    WidgetRef ref, {
-    required String conversationId,
-    required SocialChatMessage message,
-  }) async {
-    final fromId = message.agentSessionIdFromMessageId;
-    String? sessionId = fromId;
-    if (sessionId == null || sessionId.isEmpty) {
-      try {
-        final sessions = await ref
-            .read(socialRepositoryProvider)
-            .listAgentSessions(conversationId: conversationId, limit: 20);
-        final agentKey = message.sender.identityId.trim();
-        final matched = sessions.where((s) {
-          final id = s.agentId?.trim();
-          return id != null &&
-              id.isNotEmpty &&
-              (id == agentKey || id.toLowerCase() == agentKey.toLowerCase());
-        }).toList();
-        final pool = matched.isNotEmpty ? matched : sessions;
-        if (pool.isNotEmpty) {
-          pool.sort((a, b) {
-            return platformInt64ToInt(
-              b.lastActivityAtMs,
-            ).compareTo(platformInt64ToInt(a.lastActivityAtMs));
-          });
-          sessionId = pool.first.sessionId;
-        }
-      } catch (error) {
-        if (!context.mounted) return;
-        showMinosToast(
-          context,
-          title: '无法打开 session',
-          description: error.toString(),
-          destructive: true,
-        );
-        return;
-      }
-    }
-    if (!context.mounted) return;
-    if (sessionId == null || sessionId.isEmpty) {
-      showMinosToast(context, title: '暂无该 Agent 的执行 session');
-      return;
-    }
-    // Subscribe so ThreadView has a live topic when opened from chat.
-    unawaited(
-      ref
-          .read(socialRepositoryProvider)
-          .subscribeAgentSession(sessionId: sessionId),
-    );
-    unawaited(
-      context.push(AppRoutes.thread.replaceFirst(':sessionId', sessionId)),
-    );
-  }
-
   Future<void> _showMessageActions(
     BuildContext context,
     WidgetRef ref, {
@@ -687,8 +626,8 @@ class _ConversationMessagePane extends ConsumerWidget {
     switch (action) {
       case ConversationMessageAction.reply:
         ref
-            .read(socialReplyDraftProvider(conversationId).notifier)
-            .select(message.localId);
+            .read(socialChatActionsProvider(conversationId))
+            .selectReply(message);
         return;
       case ConversationMessageAction.copy:
         await copyMessageText(message.text);
@@ -698,8 +637,8 @@ class _ConversationMessagePane extends ConsumerWidget {
       case ConversationMessageAction.retry:
         try {
           await ref
-              .read(socialConversationProvider(conversationId).notifier)
-              .retryMessage(message.localId);
+              .read(socialChatActionsProvider(conversationId))
+              .retry(message.localId);
         } catch (error) {
           if (!context.mounted) return;
           _showError(context, '重试失败', error);
@@ -712,8 +651,8 @@ class _ConversationMessagePane extends ConsumerWidget {
         }
         try {
           await ref
-              .read(socialConversationProvider(conversationId).notifier)
-              .recallMessage(message.localId);
+              .read(socialChatActionsProvider(conversationId))
+              .recall(message.localId);
         } catch (error) {
           if (!context.mounted) {
             return;
@@ -726,11 +665,10 @@ class _ConversationMessagePane extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final state = ref.watch(socialConversationProvider(conversationId));
+    final state = ref.watch(socialChatViewModelProvider(conversationId));
     return RefreshIndicator(
-      onRefresh: () => ref
-          .read(socialConversationProvider(conversationId).notifier)
-          .refresh(),
+      onRefresh: () =>
+          ref.read(socialChatActionsProvider(conversationId)).refresh(),
       child: state.isLoading && state.messages.isEmpty
           ? ListView(
               controller: scrollController,
@@ -770,7 +708,6 @@ class _ConversationMessagePane extends ConsumerWidget {
                   );
                   final isMine =
                       message.sender.accountIdOrNull == state.myAccountId;
-                  final isAgent = message.senderType == SenderType.agent;
                   final mentionsMe =
                       !isMine &&
                       state.myAccountId != null &&
@@ -782,12 +719,8 @@ class _ConversationMessagePane extends ConsumerWidget {
                   final retryAction =
                       message.deliveryState == SocialMessageDeliveryState.failed
                       ? () => ref
-                            .read(
-                              socialConversationProvider(
-                                conversationId,
-                              ).notifier,
-                            )
-                            .retryMessage(message.localId)
+                            .read(socialChatActionsProvider(conversationId))
+                            .retry(message.localId)
                       : null;
                   final canShowActions =
                       !message.isRecalled &&
@@ -826,14 +759,6 @@ class _ConversationMessagePane extends ConsumerWidget {
                           mentionsMe: mentionsMe,
                           onRetry: retryAction,
                           onLongPress: actionHandler,
-                          onOpenAgentSession: !isAgent
-                              ? null
-                              : () => _openAgentSession(
-                                  context,
-                                  ref,
-                                  conversationId: conversationId,
-                                  message: message,
-                                ),
                           onToggleReaction:
                               message.serverMessageId == null ||
                                   message.isRecalled
@@ -842,9 +767,9 @@ class _ConversationMessagePane extends ConsumerWidget {
                                   unawaited(
                                     ref
                                         .read(
-                                          socialConversationProvider(
+                                          socialChatActionsProvider(
                                             conversationId,
-                                          ).notifier,
+                                          ),
                                         )
                                         .toggleReaction(
                                           messageId: message.serverMessageId!,
@@ -891,7 +816,7 @@ class _ConversationComposer extends ConsumerWidget {
     final colors = context.minosColors;
     final replyTarget = ref.watch(socialReplyMessageProvider(conversationId));
     final myAccountId = ref.watch(
-      socialConversationProvider(
+      socialChatViewModelProvider(
         conversationId,
       ).select((SocialConversationState state) => state.myAccountId),
     );
@@ -902,10 +827,6 @@ class _ConversationComposer extends ConsumerWidget {
               .toList(growable: false)
         : const <GroupMember>[];
     final hasMentionable = mentionable.isNotEmpty;
-    final activity = ref
-        .watch(conversationAgentActivityProvider(conversationId))
-        .asData
-        ?.value;
 
     return Container(
       decoration: BoxDecoration(
@@ -922,14 +843,10 @@ class _ConversationComposer extends ConsumerWidget {
               text: replyTarget.text,
               isRecalled: replyTarget.recalledAtMs != null,
               onClear: () => ref
-                  .read(socialReplyDraftProvider(conversationId).notifier)
-                  .clear(),
+                  .read(socialChatActionsProvider(conversationId))
+                  .clearReply(),
             ),
             const SizedBox(height: 10),
-          ],
-          if (activity != null) ...<Widget>[
-            _AgentActivityTicker(activity: activity),
-            const SizedBox(height: 8),
           ],
           Row(
             children: <Widget>[
@@ -958,194 +875,6 @@ class _ConversationComposer extends ConsumerWidget {
       ),
     );
   }
-}
-
-class _AgentActivityTicker extends StatelessWidget {
-  const _AgentActivityTicker({required this.activity});
-
-  final AgentActivitySnapshot activity;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.minosColors;
-    final toneColor = _activityToneColor(context, activity.tone);
-    final textStyle = Theme.of(context).textTheme.labelMedium?.copyWith(
-      color: colors.textPrimary,
-      fontWeight: FontWeight.w600,
-      height: 1.1,
-    );
-    return AnimatedSwitcher(
-      duration: const Duration(milliseconds: 180),
-      switchInCurve: Curves.easeOutCubic,
-      switchOutCurve: Curves.easeInCubic,
-      // Key by session only — label changes every stream token and must not
-      // recreate the ticker (or collide when labels match across frames).
-      child: SizedBox(
-        key: ValueKey(activity.sessionId),
-        height: 34,
-        width: double.infinity,
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: colors.surfaceMuted.withValues(alpha: 0.72),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: toneColor.withValues(alpha: 0.28)),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10),
-            child: Row(
-              children: <Widget>[
-                Icon(_activityIcon(activity.kind), size: 15, color: toneColor),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: DefaultTextStyle.merge(
-                    style: textStyle,
-                    maxLines: 1,
-                    softWrap: false,
-                    overflow: TextOverflow.clip,
-                    child: _MarqueeText(text: activity.label),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-IconData _activityIcon(AgentActivityKind kind) {
-  return switch (kind) {
-    AgentActivityKind.reasoning => CupertinoIcons.sparkles,
-    AgentActivityKind.tool => CupertinoIcons.chevron_left_slash_chevron_right,
-    AgentActivityKind.success => CupertinoIcons.gear_alt_fill,
-    AgentActivityKind.error => CupertinoIcons.exclamationmark_triangle,
-    AgentActivityKind.running => CupertinoIcons.gear_alt_fill,
-  };
-}
-
-Color _activityToneColor(BuildContext context, AgentActivityTone tone) {
-  final colors = context.minosColors;
-  return switch (tone) {
-    AgentActivityTone.info => colors.accent,
-    AgentActivityTone.success => colors.accent,
-    AgentActivityTone.error => colors.danger,
-  };
-}
-
-class _MarqueeText extends StatefulWidget {
-  const _MarqueeText({required this.text});
-
-  final String text;
-
-  @override
-  State<_MarqueeText> createState() => _MarqueeTextState();
-}
-
-class _MarqueeTextState extends State<_MarqueeText>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _controller = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 6200),
-  );
-
-  @override
-  void initState() {
-    super.initState();
-    unawaited(_controller.repeat());
-  }
-
-  @override
-  void didUpdateWidget(_MarqueeText oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.text != widget.text) {
-      _controller.reset();
-      unawaited(_controller.repeat());
-    }
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final style = DefaultTextStyle.of(context).style;
-    // Cap display length so stream previews cannot explode layout.
-    final display = _marqueeDisplayText(widget.text);
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final maxW = constraints.maxWidth;
-        if (!maxW.isFinite || maxW <= 0) {
-          return Text(
-            display,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            softWrap: false,
-          );
-        }
-
-        final painter = TextPainter(
-          text: TextSpan(text: display, style: style),
-          maxLines: 1,
-          textDirection: Directionality.of(context),
-        )..layout(maxWidth: double.infinity);
-        final textWidth = painter.width;
-        if (textWidth <= maxW) {
-          return Text(
-            display,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            softWrap: false,
-          );
-        }
-
-        const gap = 42.0;
-        final distance = textWidth + gap;
-        // OverflowBox lets the scrolling Row size itself beyond the viewport;
-        // ClipRect hides the excess. Without this, Flutter asserts Row overflow
-        // even though the marquee is intentionally wider than the slot.
-        return ClipRect(
-          child: OverflowBox(
-            alignment: Alignment.centerLeft,
-            minWidth: 0,
-            maxWidth: double.infinity,
-            minHeight: 0,
-            maxHeight: constraints.maxHeight.isFinite
-                ? constraints.maxHeight
-                : null,
-            child: AnimatedBuilder(
-              animation: _controller,
-              builder: (context, child) {
-                return Transform.translate(
-                  offset: Offset(-distance * _controller.value, 0),
-                  child: child,
-                );
-              },
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  Text(display, maxLines: 1, softWrap: false),
-                  const SizedBox(width: gap),
-                  Text(display, maxLines: 1, softWrap: false),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
-
-String _marqueeDisplayText(String raw) {
-  final collapsed = raw.replaceAll(RegExp(r'\s+'), ' ').trim();
-  if (collapsed.isEmpty) return '…';
-  const maxChars = 80;
-  if (collapsed.length <= maxChars) return collapsed;
-  return '${collapsed.substring(0, maxChars - 1)}…';
 }
 
 class _ComposerReplyBanner extends StatelessWidget {

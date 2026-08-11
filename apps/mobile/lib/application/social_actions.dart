@@ -22,10 +22,6 @@ class SocialActions {
     );
   }
 
-  Future<void> setMinosId({required String minosId}) {
-    return _repository.setMinosId(minosId: minosId);
-  }
-
   Future<ConversationResponse> createGroupConversation({
     required String title,
     required List<String> memberAccountIds,
@@ -34,18 +30,6 @@ class SocialActions {
       title: title,
       memberAccountIds: memberAccountIds,
     );
-  }
-
-  Future<void> rejectFriendRequest({required String requestId}) {
-    return _repository.rejectFriendRequest(requestId: requestId);
-  }
-
-  Future<void> acceptFriendRequest({required String requestId}) {
-    return _repository.acceptFriendRequest(requestId: requestId);
-  }
-
-  Future<void> createFriendRequest({required String targetMinosId}) {
-    return _repository.createFriendRequest(targetMinosId: targetMinosId);
   }
 
   Future<void> addGroupMember({

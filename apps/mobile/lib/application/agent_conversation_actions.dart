@@ -1,6 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'package:minos/application/active_session_provider.dart';
 import 'package:minos/application/agent_profiles_provider.dart';
 import 'package:minos/application/group_agent_provider.dart';
 import 'package:minos/application/minos_providers.dart';
@@ -32,7 +31,6 @@ Future<ConversationResponse> createAgentConversation(
     agentId: serverProfile.agentId,
   );
 
-  ref.read(activeSessionControllerProvider.notifier).reset();
   ref.invalidate(conversationsProvider);
   ref.invalidate(conversationParticipantsProvider(conversation.conversationId));
 

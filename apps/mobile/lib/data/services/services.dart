@@ -17,4 +17,3 @@ export 'package:minos/infrastructure/minos_core.dart';
 export 'package:minos/infrastructure/platform_int64.dart';
 export 'package:minos/infrastructure/secure_pairing_store.dart';
 export 'package:minos/infrastructure/social_cache_store.dart';
-export 'package:minos/infrastructure/workspace_mru_store.dart';

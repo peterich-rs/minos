@@ -21,24 +21,34 @@ lib/
   architecture.dart                  # 架构文档（dartdoc）
   domain/                            # 纯 Dart 模型 + 协议
     auth_state.dart                  # 认证状态机
-    active_session.dart              # Agent 会话状态机
-    agent_profile.dart               # Agent 配置文件
-    minos_core_protocol.dart         # 抽象 Dart 契约（~60 方法）
+    agent_profile.dart               # 本地 bot cache / draft
+    social_message.dart              # 协作消息模型
+    minos_core_protocol.dart         # 抽象 Dart 契约（IM/auth/hosts/realtime）
   infrastructure/                    # 具体实现
-    minos_core.dart                  # FRB 实现（599 行）
+    minos_core.dart                  # FRB 实现
     secure_pairing_store.dart        # iOS Keychain 持久化
+    social_cache_store.dart          # SQLite cache + outbox SQL
+    im_outbox_store.dart             # Outbox 策略
   data/                              # 仓库 + 服务
     cloud/                           # 纯 Dart 云控制面（exchange / hosts mapper）
-    repositories/                    # 各功能仓库（含 HostsRepository）
+    repositories/                    # 各功能仓库（含 HostsRepository / SocialRepository）
     services/                        # 服务
   application/                       # Riverpod providers / ViewModels
     auth_provider.dart               # 认证状态
-    active_session_provider.dart     # Agent 会话
-    thread_events_provider.dart      # 线程事件
-    minos_providers.dart             # 连接 / linked hosts / 设备
-    project_providers.dart           # 项目
-    social_providers.dart            # 社交
-    thread_commands.dart             # 命令门面
+    minos_providers.dart             # 连接 / linked hosts / presence
+    social/                          # Conversation IM feature modules
+      social_conversation_state.dart # freezed timeline state
+      social_conversation_notifier.dart
+      social_inbox_notifier.dart
+      social_chat_view_model.dart    # feature ViewModel 聚合
+      social_chat_actions.dart       # 意图化 Action
+      social_ui_state.dart
+      social_friends_providers.dart
+      social_realtime_sync.dart
+    social_providers.dart            # 兼容 barrel（re-export social/*）
+    im_outbox_worker.dart            # 本地 IM outbox drain
+    agent_profiles_provider.dart     # 本地 bot cache（compose 选 bot）
+    group_agent_provider.dart        # participants / mention roster
     root_route_decision.dart         # 根路由决策
   ui/                                # 功能组织 UI
     theme/                           # Minos design tokens（color/spacing/radius/type）
@@ -46,16 +56,13 @@ lib/
     features/
       shell/                         # 应用壳（消息 / Hosts / 账户）
       messages/                      # Golden-path conversation inbox
-      sessions/                      # Agent session inbox（次级）
       hosts/                         # Linked hosts 列表
       account/                       # 账户 / 退出登录
       auth/                          # 登录注册
-      chat/                          # Agent session transcript stream + composer
-      social/                        # 协作 IM 聊天 / 成员（次级路由）
+      social/                        # 协作 IM 聊天 / 成员
         lib/message_grouping.dart    # 10min 分组 + day divider（对齐 Desktop）
         widgets/                     # Slack/Buzz 全宽行 chrome / row / actions
-      projects/                      # 项目（次级路由）
-      agents/                        # Agent profile（次级路由）
+      debug/                         # 日志与请求追踪
   src/rust/                          # 自动生成的 FRB 代码（勿手改）
 ```
 
@@ -75,16 +82,17 @@ lib/
 | Provider | 类型 | 用途 |
 |----------|------|------|
 | `authControllerProvider` | `@Riverpod(keepAlive: true)` | 认证状态 |
-| `activeSessionControllerProvider` | `@Riverpod(keepAlive: true)` | Agent 会话状态机 |
-| `threadEventsProvider(sessionId)` | `@Riverpod(keepAlive: true)` | 线程事件 |
-| `connectionStateProvider` | `@Riverpod(keepAlive: true)` | 连接状态 |
+| `connectionStateProvider` | `@Riverpod(keepAlive: true)` | 连接状态（Account `/ws/client`） |
 | `pairedMacsProvider` | `AsyncNotifierProvider` | Linked hosts（`GET /v1/hosts`） |
 | `hostsRepositoryProvider` | `Provider` | 纯 Dart hosts 列表 + FRB fallback |
-| `projectListProvider` | `@Riverpod(keepAlive: true)` | 项目 CRUD |
-| `conversationsProvider` | `AsyncNotifierProvider` | 对话列表 |
-| `friendsProvider` | `AsyncNotifierProvider` | 好友列表 |
+| `conversationsProvider` | `AsyncNotifierProvider` | 对话列表（InboxSync） |
+| `socialConversationProvider` | `@riverpod` family | 打开会话时间线（TimelineSync） |
+| `socialChatViewModelProvider` | `@riverpod` family | SocialChat feature 聚合状态 |
+| `socialChatActionsProvider` | `Provider.family` | SocialChat 意图化 action |
+| `friendsProvider` | `AsyncNotifierProvider` | 好友列表（Messages 选人） |
+| `imOutboxWorkerProvider` | `Provider` | 本地 IM outbox drain |
 
-**模式**: 每个 Provider 是 `AsyncNotifier` / `Notifier`，包裹 Repository。Repository 调用 `MinosCoreProtocol`。UI 只 watch provider。
+**模式**: 保留 Riverpod + codegen；复杂 feature 使用 **ViewModel 聚合 + Action 层 + freezed 状态机**。UI 优先 `socialChatViewModelProvider` / `socialChatActionsProvider`，而不是直接编排几十个细粒度 provider。协作发送唯一路径：`SocialChatActions.send` → `SocialConversation.sendMessage` → outbox → `sendChatMessage`。
 
 ## 路由系统
 
@@ -95,34 +103,33 @@ lib/
 | `/splash` | `_SplashScreen` | 启动加载 |
 | `/login` | `LoginPage` | 登录/注册 |
 | `/` | `AppShellPage` | 主壳（消息 / Hosts / 账户） |
-| `/sessions` | `SessionsPage` | Agent session 列表（次级） |
-| `/thread/:sessionId` | `ThreadViewPage` | Agent 线程对话 |
-| `/thread/new` | `ThreadViewPage` | 新线程 |
-| `/agent-start` | `AgentStartPage` | Agent 选择（次级） |
-| `/project/:projectId` | `ProjectDetailPage` | 项目详情（次级） |
 | `/social` | redirect → `/` | 旧消息入口，兼容跳转到 shell 消息 Tab |
 | `/social/chat/:conversationId` | `SocialChatPage` | Conversation 协作 IM（Hub 气泡；Slack/Buzz 全宽左对齐行） |
+| `/social/chat/:conversationId/members` | `GroupMembersPage` | 群成员 |
+| `/log-viewer` | `LogViewerPage` | 开发者日志 |
+
+**已下线（不再作为产品面）**：`/thread/*`、`/sessions`、`/agent-start`、`/agent-profile/*`、`/project/*`，以及 Agent session transcript / Projects / Agents Hub UI。
 
 ### 根路由决策 (`root_route_decision.dart`)
 
 ```
 AuthBootstrapping / AuthRefreshing → splash
 AuthUnauthenticated / AuthRefreshFailed → login
-AuthAuthenticated + Connected → projectList
-AuthAuthenticated + offline → projectListOffline
+AuthAuthenticated + Connected → shell
+AuthAuthenticated + offline → shellOffline
 ```
 
 `createAppRouter` redirect only reads synchronous `authControllerProvider`.
-`projectList` and `projectListOffline` both map to shell `/` (offline chrome is
-in-shell). Do not seed login-page provider state from widget `initState` —
+`shell` and `shellOffline` both map to shell `/` (offline chrome is in-shell).
+Do not seed login-page provider state from widget `initState` —
 `LoginPageStateController.build` reads `AuthRefreshFailed` once when the
 provider is created.
 
 ### App Shell（3 个 Tab）
 
-- **Tab 0 (消息)**: `MessagesPage` — 全部 conversation，按 `lastMessageAtMs` 倒序
-- **Tab 1 (Hosts)**: `HostsPage` — linked hosts
-- **Tab 2 (账户)**: `AccountPage` — profile / logout；入口可进次级「Agent 会话」
+- **Tab 0 (消息)**: `MessagesPage` — 全部 conversation，按 `lastMessageAtMs` 倒序；可新建 DM / 群 / agent conversation
+- **Tab 1 (Hosts)**: `HostsPage` — linked hosts（bot runtime 身体）
+- **Tab 2 (账户)**: `AccountPage` — profile / logout / 开发者工具
 
 UI 使用自研 **Minos design tokens**（iOS 向手感），不再依赖 `shadcn_ui`。
 
@@ -137,14 +144,14 @@ UI 使用自研 **Minos design tokens**（iOS 向手感），不再依赖 `shadc
 | 分隔 | 日历日 `ConversationDayDivider`（今天 / 昨天 / 日期） |
 | 撤回 | 居中 `ConversationSystemMessage` |
 | 交互 | 长按：引用 / 复制 / 重试 / 撤回；失败红 `!` 重试；stick-to-bottom + 跳转最新 FAB |
-| 实时 | Composer 上 Agent activity ticker；深链 Agent 气泡 → `/thread/:sessionId` |
+| 发送 | 唯一主链路：outbox + `sendChatMessage`（Account WS `AppendMessage`） |
 | TimelineSync | `SocialConversationState` 维护 `minLoadedSeq` / `maxLoadedSeq` / `hasOlder`；`loadOlder()` → Hub `before_seq`；近顶滚动触发 |
 | InboxSync | `ConversationsController` 事件 → 单行 patch + unread bump；**禁止**每事件 `invalidateSelf` / 全量 REST |
 | SnapshotRequired | Rust `UiEvent raw(kind=snapshot_required)` → `imSnapshotSyncProvider`：conversation 仅 `ref.exists` 时 range reconcile（不 cold-start / 不 mark-read）；account → inbox hydrate |
 | 排序 | durable 仅 `server_order_key`（message_seq）；禁止 `COALESCE(seq, created_at_ms)` |
 | parse 失败 | Rust `parse_chat_message` 返回 `None`，不入空壳气泡 |
 
-**注意**：Agent session transcript（`ThreadViewPage` / `MessageBubble`）仍是执行面，可保留 L/R 或 transcript rail，不与协作 IM 行壳混用。
+**注意**：Mobile 不再提供 Agent session transcript 产品面。Bot 结果以 Hub conversation 气泡呈现；执行审批/transcript 若后续恢复，应做成 conversation-scoped Attention，而不是独立 `/thread` 发送主链路。
 
 ## Rust FFI 桥接
 
@@ -177,12 +184,13 @@ Rust crate (minos-mobile::MobileClient)
 
 - **认证**: `register`, `login`, `loginWithSupabase`, `refreshSession`, `logout`, `subscribeAuthState`
 - **Hosts**: `listPairedHosts`（内部 `GET /v1/hosts`）, `activeHost`, `setActiveHost`, `forgetHost`（`POST /v1/hosts/unlink`）
-- **社交**: `conversations`, `sendChatMessage`, `friends`, `friendRequests`, `searchUsers`
-- **项目**: `createProject`, `listProjects`, `updateProject`, `deleteProject`
-- **线程**: `listThreads`, `readThread`, `sendUserMessage`, `interruptThread`, `closeThread`
-- **Agent 请求**: `sendApprovalDecision`, `respondOpencodeQuestion`
-- **实时**: `subscribeState`, `subscribeUiEvents`, `subscribeSocialEvents`
+- **社交 IM**: `conversations`, `sendChatMessage`, `friends`, participants / membership
+- **实时**: `subscribeState`, `subscribeUiEvents`, `subscribeSocialEvents`, conversation topic subscribe/ack
+- **Hosts**: `listPairedHosts`, `activeHost`, `setActiveHost`, `forgetHost`
+- **Auth**: `loginWithSupabase`, `refreshSession`, `logout`, `subscribeAuthState`
 - **生命周期**: `notifyForegrounded`, `notifyBackgrounded`
+
+Mobile 不再暴露 thread transcript / project CRUD / agent-session compose / friend-search 管理 API；这些能力若存在于 backend/Desktop，也不再经 Mobile 协议面。
 
 ## 认证流程
 
@@ -235,41 +243,15 @@ QR pairing is removed (Phase D). Desktop links the Mac with the same account; Mo
 2. On failure, falls back to FRB `listPairedHosts` (Rust also uses `GET /v1/hosts`)
 3. `pairedMacsProvider` drives Hosts UI; empty state points users to Desktop **Link this Mac**
 4. If no active host is set, auto-select the first online host (else first listed) as routing target
-5. Session list / stream / send stay on `/v1/agent-sessions/*` + `/ws/client` (account bearer)
+5. Mobile 不提供独立 Agent session 发送/transcript 产品面；bot 结果以 Hub conversation 气泡呈现
 6. Forget host uses `POST /v1/hosts/unlink`
 
-## Agent 会话管理
+## Agent / Bot 在 Mobile 中的角色
 
-### 状态机
-
-```
-SessionIdle --send()--> SessionSending --first UI frame--> SessionStreaming
-                         |                                            |
-                         +--error--> SessionError                     |
-                                                                      v
-                    SessionStreaming --MessageCompleted--> SessionAwaitingInput
-                         |                                            |
-                         +--stop()/SessionClosed--> SessionSuspended   |
-                         |                                            |
-                         +--error--> SessionError<--send failure------+
-                         <-----------send() (follow-up)---------------+
-```
-
-### 线程事件 Provider
-
-- 加载初始页: `readThread()`
-- 订阅实时 `UiEventFrame` 流
-- 基于 seq 水位线去重
-- `keepAlive: true`，导航离开不丢失状态
-- `UiEventMessage` 文本字段使用 `DisplayPayload`，Dart 通过 `display_payload_preview.dart` 渲染 inline/windowed preview；artifact 引用保留在线程归属内，后续完整展开走 range read API。
-- 聊天 transcript 投影由 `application/thread_event_timeline.dart` 的 `buildThreadEventTimeline` 完成：按事件**首次出现**顺序生成 row（user / reasoning / tool / assistant text），**连续**流式片段原地更新；Gemini/Grok ACP 虽把 thinking、tool、text 挂在同一 `message_id` 上，也必须按时间线切开——中间产物（早期 `agent_message_chunk` / thought）与 tool 之后的最终回复各自独立 row，不能拼成一条钉在用户消息后的“假最终回复”。tool / text 插入后新 thinking 开新 reasoning 段；tool / reasoning 插入后新 text 开新 assistant text 段，都排在时间线末尾。仅仍 open 的 text 段在 live turn 上显示 streaming cursor；已结束的中间消息与 thinking 不带光标。
-- `Raw(kind="opencode/question.asked")` 由 `ThreadViewPage` 解析为 `AgentQuestionRequestData`，通过 `agent_question_sheet.dart` 展示问题和选项；提交后走 `ThreadCommands.respondOpencodeQuestion()` → `ThreadRepository` → `MinosCore` → FRB → `MobileClient.respond_opencode_question()` → `POST /v1/agent-sessions/respond-opencode-question`。
-
-### Agent 配置文件
-
-`AgentProfile` 不可变模型: id, agentId, name, description, runtimeAgent, model, reasoningEffort, environmentVariables, hostDeviceId, workspacePath
-
-持久化为 JSON 文件。
+- **Hub bot identity** 是多端 SSOT；`AgentProfile` 本地 JSON 仅作 compose 选 bot 的 cache/draft。
+- Messages 可新建 agent conversation（`createAgentConversation` → 建 group + addAgent）。
+- 协作发送与 @bot 都走 conversation 时间线；Host 只是 bot runtime 身体（Hosts tab 可见性）。
+- Mobile 当前**不**承载 session transcript / approval / opencode question UI。若后续恢复，应做成 conversation-scoped Attention，而不是复活 `/thread` 发送主链路。
 
 ## Rust WebSocket 架构
 
@@ -311,38 +293,23 @@ SessionIdle --send()--> SessionSending --first UI frame--> SessionStreaming
 | `register` | 严格注册 → 配对（`EmailTaken` 不降级） |
 | `smoke-session` | 完整流程: 注册 → 配对 → `send_user_message` → 流式接收 |
 
-## 数据流（端到端聊天消息）
+## 数据流（端到端协作 IM 消息）
 
 ```
-用户在 InputBar 输入
-  → ThreadCommands.sendUserMessage()
-    → ThreadRepository.sendUserMessage()
-      → MinosCore.sendUserMessage()
-        → MobileClient.send_user_message() [Rust, via FRB]
-          → MobileHttpClient.send_agent_input() [HTTP POST]
+用户在 SocialChatPage composer 输入
+  → SocialConversation.sendMessage()
+      → SocialCacheStore.insertPendingMessageWithOutbox  [TX: sending + outbox]
+      → UI 乐观展示
+      → ImOutboxWorker.flush()
+          → SocialRepository.sendChatMessage()
+            → MinosCore.sendChatMessage()
+              → MobileClient.send_chat_message() [Rust FRB]
+                → WS ClientFrame::AppendMessage
+                → wait ChatSendAck / Nack
 
-后端通过 WS 广播:
-  → ServerFrame::StreamEvent (topic: agent_session:xxx)
-    → RealtimeSession.run() 接收
-      → handle_server_frame() → dispatch_event()
-        → UiEventFrame broadcast
-          → ActiveSessionController._onUiEvent() [Dart]
-            → 状态机转换
-          → ThreadEvents [Dart]
-            → 追加事件列表
-              → ThreadViewPage 渲染 DisplayPayload preview 并重建 UI
-```
-
-### Agent question 数据流
-
-```
-opencode question.asked
-  → daemon projection Raw(kind="opencode/question.asked")
-  → backend StreamEvent → mobile UiEventFrame
-  → ThreadViewPage.showAgentQuestionSheet()
-  → 用户选择/输入答案
-  → ThreadCommands.respondOpencodeQuestion()
-  → POST /v1/agent-sessions/respond-opencode-question
-  → host command minos_respond_opencode_question
-  → daemon AgentGlue → AgentManager → opencode POST /question/{requestID}/reply
+后端 durable fanout:
+  → ServerFrame::DurableEvent (conversation / account topics)
+    → RealtimeSession → social_events broadcast
+      → SocialConversation / ConversationsController 投影
+      → Dart commit cache 后 ackDurableApplied
 ```

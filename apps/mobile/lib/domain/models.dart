@@ -12,7 +12,6 @@
 ///   - All domain models should be immutable (use `@immutable` or sealed).
 library;
 
-export 'active_session.dart';
 export 'agent_profile.dart';
 export 'auth_state.dart';
 export 'group_member.dart';

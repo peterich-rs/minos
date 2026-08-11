@@ -4,8 +4,8 @@ import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart'
     show AsyncNotifier, AsyncNotifierProvider, FutureProvider, Provider;
 import 'package:minos/data/repositories/hosts_repository.dart';
+import 'package:minos/data/repositories/realtime_events_repository.dart';
 import 'package:minos/data/repositories/runtime_repository.dart';
-import 'package:minos/data/repositories/thread_repository.dart';
 import 'package:minos/domain/linked_host.dart';
 import 'package:minos/infrastructure/platform_int64.dart';
 import 'package:minos/src/rust/api/minos.dart';
@@ -27,7 +27,7 @@ Stream<ConnectionState> connectionState(Ref ref) {
 /// Also arms HostLinked / HostUnlinked durable roster events (Realtime R1):
 /// upsert/remove members — not presence-only.
 final hostPresenceSyncProvider = Provider<void>((ref) {
-  final repo = ref.watch(threadRepositoryProvider);
+  final repo = ref.watch(realtimeEventsRepositoryProvider);
   final sub = repo.uiEvents.listen((frame) {
     final ui = frame.ui;
     if (ui is! UiEventMessage_Raw) return;

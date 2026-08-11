@@ -3,11 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:minos/application/agent_profiles_provider.dart';
 import 'package:minos/application/im_outbox_worker.dart';
 import 'package:minos/application/minos_providers.dart';
-import 'package:minos/application/project_providers.dart';
 import 'package:minos/application/runtime_actions.dart';
 import 'package:minos/application/social_providers.dart';
-import 'package:minos/application/thread_events_provider.dart';
-import 'package:minos/application/thread_list_provider.dart';
 import 'package:minos/src/rust/api/minos.dart' as core;
 import 'package:minos/ui/features/shell/router_provider.dart';
 import 'package:minos/ui/theme/theme.dart';
@@ -58,12 +55,8 @@ class _MinosAppState extends ConsumerState<MinosApp>
       }
 
       ref
-        ..invalidate(projectListProvider)
-        ..invalidate(threadListProvider)
-        ..invalidate(threadEventsProvider)
         ..invalidate(conversationsProvider)
         ..invalidate(friendsProvider)
-        ..invalidate(friendRequestsProvider)
         ..invalidate(socialProfileProvider)
         ..invalidate(pairedMacsProvider)
         ..invalidate(activeMacProvider)

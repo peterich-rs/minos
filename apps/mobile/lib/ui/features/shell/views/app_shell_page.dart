@@ -10,8 +10,7 @@ import 'package:minos/ui/theme/theme.dart';
 
 /// Golden-path mobile shell: Messages / Hosts / Account.
 ///
-/// Single-column bottom navigation. Agent sessions, projects, and agent-profile
-/// management stay reachable via secondary routes.
+/// Single-column bottom navigation for IM-first Mobile.
 class AppShellPage extends ConsumerWidget {
   const AppShellPage({super.key});
 

@@ -124,9 +124,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   AgentName dco_decode_agent_name(dynamic raw);
 
   @protected
-  AgentSessionSummaryDto dco_decode_agent_session_summary_dto(dynamic raw);
-
-  @protected
   AgentStatus dco_decode_agent_status(dynamic raw);
 
   @protected
@@ -145,9 +142,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   bool dco_decode_bool(dynamic raw);
 
   @protected
-  AgentName dco_decode_box_autoadd_agent_name(dynamic raw);
-
-  @protected
   ArtifactRef dco_decode_box_autoadd_artifact_ref(dynamic raw);
 
   @protected
@@ -159,28 +153,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
-  CreateProjectRequest dco_decode_box_autoadd_create_project_request(
-    dynamic raw,
-  );
-
-  @protected
-  DeleteProjectRequest dco_decode_box_autoadd_delete_project_request(
-    dynamic raw,
-  );
-
-  @protected
   DisplayPayload dco_decode_box_autoadd_display_payload(dynamic raw);
 
   @protected
   PlatformInt64 dco_decode_box_autoadd_i_64(dynamic raw);
-
-  @protected
-  ListProjectSessionsParams dco_decode_box_autoadd_list_project_sessions_params(
-    dynamic raw,
-  );
-
-  @protected
-  ListSessionsParams dco_decode_box_autoadd_list_sessions_params(dynamic raw);
 
   @protected
   MinosError dco_decode_box_autoadd_minos_error(dynamic raw);
@@ -191,9 +167,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
-  ReadSessionParams dco_decode_box_autoadd_read_session_params(dynamic raw);
-
-  @protected
   SessionEndReason dco_decode_box_autoadd_session_end_reason(dynamic raw);
 
   @protected
@@ -201,14 +174,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   int dco_decode_box_autoadd_u_32(dynamic raw);
-
-  @protected
-  BigInt dco_decode_box_autoadd_u_64(dynamic raw);
-
-  @protected
-  UpdateProjectRequest dco_decode_box_autoadd_update_project_request(
-    dynamic raw,
-  );
 
   @protected
   UserSummary dco_decode_box_autoadd_user_summary(dynamic raw);
@@ -254,28 +219,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ConversationsResponse dco_decode_conversations_response(dynamic raw);
 
   @protected
-  CreateProjectRequest dco_decode_create_project_request(dynamic raw);
-
-  @protected
-  CreateProjectResponse dco_decode_create_project_response(dynamic raw);
-
-  @protected
-  DeleteProjectRequest dco_decode_delete_project_request(dynamic raw);
-
-  @protected
   DisplayPayload dco_decode_display_payload(dynamic raw);
 
   @protected
   ErrorKind dco_decode_error_kind(dynamic raw);
-
-  @protected
-  FriendRequestStatus dco_decode_friend_request_status(dynamic raw);
-
-  @protected
-  FriendRequestSummary dco_decode_friend_request_summary(dynamic raw);
-
-  @protected
-  FriendRequestsResponse dco_decode_friend_requests_response(dynamic raw);
 
   @protected
   FriendSummary dco_decode_friend_summary(dynamic raw);
@@ -308,21 +255,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Lang dco_decode_lang(dynamic raw);
 
   @protected
-  List<SessionSummary>
-  dco_decode_list_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
-    dynamic raw,
-  );
-
-  @protected
   List<String> dco_decode_list_String(dynamic raw);
 
   @protected
   List<AgentDescriptor> dco_decode_list_agent_descriptor(dynamic raw);
-
-  @protected
-  List<AgentSessionSummaryDto> dco_decode_list_agent_session_summary_dto(
-    dynamic raw,
-  );
 
   @protected
   List<AgentSummary> dco_decode_list_agent_summary(dynamic raw);
@@ -343,11 +279,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<ConversationSummary> dco_decode_list_conversation_summary(dynamic raw);
-
-  @protected
-  List<FriendRequestSummary> dco_decode_list_friend_request_summary(
-    dynamic raw,
-  );
 
   @protected
   List<FriendSummary> dco_decode_list_friend_summary(dynamic raw);
@@ -384,22 +315,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
 
   @protected
-  ListProjectSessionsParams dco_decode_list_project_sessions_params(
-    dynamic raw,
-  );
-
-  @protected
-  ListProjectSessionsResponse dco_decode_list_project_sessions_response(
-    dynamic raw,
-  );
-
-  @protected
-  List<ProjectSummary> dco_decode_list_project_summary(dynamic raw);
-
-  @protected
-  ListProjectsResponse dco_decode_list_projects_response(dynamic raw);
-
-  @protected
   List<ReactionActor> dco_decode_list_reaction_actor(dynamic raw);
 
   @protected
@@ -407,15 +322,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<RequestTraceRecord> dco_decode_list_request_trace_record(dynamic raw);
-
-  @protected
-  ListSessionsParams dco_decode_list_sessions_params(dynamic raw);
-
-  @protected
-  ListSessionsResponse dco_decode_list_sessions_response(dynamic raw);
-
-  @protected
-  List<UiEventMessage> dco_decode_list_ui_event_message(dynamic raw);
 
   @protected
   List<UserSummary> dco_decode_list_user_summary(dynamic raw);
@@ -442,9 +348,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   String? dco_decode_opt_String(dynamic raw);
 
   @protected
-  AgentName? dco_decode_opt_box_autoadd_agent_name(dynamic raw);
-
-  @protected
   ArtifactRef? dco_decode_opt_box_autoadd_artifact_ref(dynamic raw);
 
   @protected
@@ -464,9 +367,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   int? dco_decode_opt_box_autoadd_u_32(dynamic raw);
 
   @protected
-  BigInt? dco_decode_opt_box_autoadd_u_64(dynamic raw);
-
-  @protected
   UserSummary? dco_decode_opt_box_autoadd_user_summary(dynamic raw);
 
   @protected
@@ -476,19 +376,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PersistedPairingState dco_decode_persisted_pairing_state(dynamic raw);
 
   @protected
-  ProjectSummary dco_decode_project_summary(dynamic raw);
-
-  @protected
   ReactionActor dco_decode_reaction_actor(dynamic raw);
 
   @protected
   ReactionGroup dco_decode_reaction_group(dynamic raw);
-
-  @protected
-  ReadSessionParams dco_decode_read_session_params(dynamic raw);
-
-  @protected
-  ReadSessionResponse dco_decode_read_session_response(dynamic raw);
 
   @protected
   RequestTraceRecord dco_decode_request_trace_record(dynamic raw);
@@ -534,9 +425,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void dco_decode_unit(dynamic raw);
-
-  @protected
-  UpdateProjectRequest dco_decode_update_project_request(dynamic raw);
 
   @protected
   UserSummary dco_decode_user_summary(dynamic raw);
@@ -645,11 +533,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   AgentName sse_decode_agent_name(SseDeserializer deserializer);
 
   @protected
-  AgentSessionSummaryDto sse_decode_agent_session_summary_dto(
-    SseDeserializer deserializer,
-  );
-
-  @protected
   AgentStatus sse_decode_agent_status(SseDeserializer deserializer);
 
   @protected
@@ -668,9 +551,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   bool sse_decode_bool(SseDeserializer deserializer);
 
   @protected
-  AgentName sse_decode_box_autoadd_agent_name(SseDeserializer deserializer);
-
-  @protected
   ArtifactRef sse_decode_box_autoadd_artifact_ref(SseDeserializer deserializer);
 
   @protected
@@ -678,16 +558,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ChatMessageReplySummary sse_decode_box_autoadd_chat_message_reply_summary(
-    SseDeserializer deserializer,
-  );
-
-  @protected
-  CreateProjectRequest sse_decode_box_autoadd_create_project_request(
-    SseDeserializer deserializer,
-  );
-
-  @protected
-  DeleteProjectRequest sse_decode_box_autoadd_delete_project_request(
     SseDeserializer deserializer,
   );
 
@@ -700,25 +570,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PlatformInt64 sse_decode_box_autoadd_i_64(SseDeserializer deserializer);
 
   @protected
-  ListProjectSessionsParams sse_decode_box_autoadd_list_project_sessions_params(
-    SseDeserializer deserializer,
-  );
-
-  @protected
-  ListSessionsParams sse_decode_box_autoadd_list_sessions_params(
-    SseDeserializer deserializer,
-  );
-
-  @protected
   MinosError sse_decode_box_autoadd_minos_error(SseDeserializer deserializer);
 
   @protected
   PersistedPairingState sse_decode_box_autoadd_persisted_pairing_state(
-    SseDeserializer deserializer,
-  );
-
-  @protected
-  ReadSessionParams sse_decode_box_autoadd_read_session_params(
     SseDeserializer deserializer,
   );
 
@@ -732,14 +587,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   int sse_decode_box_autoadd_u_32(SseDeserializer deserializer);
-
-  @protected
-  BigInt sse_decode_box_autoadd_u_64(SseDeserializer deserializer);
-
-  @protected
-  UpdateProjectRequest sse_decode_box_autoadd_update_project_request(
-    SseDeserializer deserializer,
-  );
 
   @protected
   UserSummary sse_decode_box_autoadd_user_summary(SseDeserializer deserializer);
@@ -799,40 +646,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
-  CreateProjectRequest sse_decode_create_project_request(
-    SseDeserializer deserializer,
-  );
-
-  @protected
-  CreateProjectResponse sse_decode_create_project_response(
-    SseDeserializer deserializer,
-  );
-
-  @protected
-  DeleteProjectRequest sse_decode_delete_project_request(
-    SseDeserializer deserializer,
-  );
-
-  @protected
   DisplayPayload sse_decode_display_payload(SseDeserializer deserializer);
 
   @protected
   ErrorKind sse_decode_error_kind(SseDeserializer deserializer);
-
-  @protected
-  FriendRequestStatus sse_decode_friend_request_status(
-    SseDeserializer deserializer,
-  );
-
-  @protected
-  FriendRequestSummary sse_decode_friend_request_summary(
-    SseDeserializer deserializer,
-  );
-
-  @protected
-  FriendRequestsResponse sse_decode_friend_requests_response(
-    SseDeserializer deserializer,
-  );
 
   @protected
   FriendSummary sse_decode_friend_summary(SseDeserializer deserializer);
@@ -867,21 +684,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Lang sse_decode_lang(SseDeserializer deserializer);
 
   @protected
-  List<SessionSummary>
-  sse_decode_list_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
-    SseDeserializer deserializer,
-  );
-
-  @protected
   List<String> sse_decode_list_String(SseDeserializer deserializer);
 
   @protected
   List<AgentDescriptor> sse_decode_list_agent_descriptor(
-    SseDeserializer deserializer,
-  );
-
-  @protected
-  List<AgentSessionSummaryDto> sse_decode_list_agent_session_summary_dto(
     SseDeserializer deserializer,
   );
 
@@ -912,11 +718,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<ConversationSummary> sse_decode_list_conversation_summary(
-    SseDeserializer deserializer,
-  );
-
-  @protected
-  List<FriendRequestSummary> sse_decode_list_friend_request_summary(
     SseDeserializer deserializer,
   );
 
@@ -967,26 +768,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
 
   @protected
-  ListProjectSessionsParams sse_decode_list_project_sessions_params(
-    SseDeserializer deserializer,
-  );
-
-  @protected
-  ListProjectSessionsResponse sse_decode_list_project_sessions_response(
-    SseDeserializer deserializer,
-  );
-
-  @protected
-  List<ProjectSummary> sse_decode_list_project_summary(
-    SseDeserializer deserializer,
-  );
-
-  @protected
-  ListProjectsResponse sse_decode_list_projects_response(
-    SseDeserializer deserializer,
-  );
-
-  @protected
   List<ReactionActor> sse_decode_list_reaction_actor(
     SseDeserializer deserializer,
   );
@@ -998,21 +779,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<RequestTraceRecord> sse_decode_list_request_trace_record(
-    SseDeserializer deserializer,
-  );
-
-  @protected
-  ListSessionsParams sse_decode_list_sessions_params(
-    SseDeserializer deserializer,
-  );
-
-  @protected
-  ListSessionsResponse sse_decode_list_sessions_response(
-    SseDeserializer deserializer,
-  );
-
-  @protected
-  List<UiEventMessage> sse_decode_list_ui_event_message(
     SseDeserializer deserializer,
   );
 
@@ -1043,11 +809,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   String? sse_decode_opt_String(SseDeserializer deserializer);
 
   @protected
-  AgentName? sse_decode_opt_box_autoadd_agent_name(
-    SseDeserializer deserializer,
-  );
-
-  @protected
   ArtifactRef? sse_decode_opt_box_autoadd_artifact_ref(
     SseDeserializer deserializer,
   );
@@ -1073,9 +834,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   int? sse_decode_opt_box_autoadd_u_32(SseDeserializer deserializer);
 
   @protected
-  BigInt? sse_decode_opt_box_autoadd_u_64(SseDeserializer deserializer);
-
-  @protected
   UserSummary? sse_decode_opt_box_autoadd_user_summary(
     SseDeserializer deserializer,
   );
@@ -1089,23 +847,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
-  ProjectSummary sse_decode_project_summary(SseDeserializer deserializer);
-
-  @protected
   ReactionActor sse_decode_reaction_actor(SseDeserializer deserializer);
 
   @protected
   ReactionGroup sse_decode_reaction_group(SseDeserializer deserializer);
-
-  @protected
-  ReadSessionParams sse_decode_read_session_params(
-    SseDeserializer deserializer,
-  );
-
-  @protected
-  ReadSessionResponse sse_decode_read_session_response(
-    SseDeserializer deserializer,
-  );
 
   @protected
   RequestTraceRecord sse_decode_request_trace_record(
@@ -1159,11 +904,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_decode_unit(SseDeserializer deserializer);
-
-  @protected
-  UpdateProjectRequest sse_decode_update_project_request(
-    SseDeserializer deserializer,
-  );
 
   @protected
   UserSummary sse_decode_user_summary(SseDeserializer deserializer);
@@ -1294,12 +1034,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_agent_name(AgentName self, SseSerializer serializer);
 
   @protected
-  void sse_encode_agent_session_summary_dto(
-    AgentSessionSummaryDto self,
-    SseSerializer serializer,
-  );
-
-  @protected
   void sse_encode_agent_status(AgentStatus self, SseSerializer serializer);
 
   @protected
@@ -1321,12 +1055,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_bool(bool self, SseSerializer serializer);
 
   @protected
-  void sse_encode_box_autoadd_agent_name(
-    AgentName self,
-    SseSerializer serializer,
-  );
-
-  @protected
   void sse_encode_box_autoadd_artifact_ref(
     ArtifactRef self,
     SseSerializer serializer,
@@ -1345,18 +1073,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
-  void sse_encode_box_autoadd_create_project_request(
-    CreateProjectRequest self,
-    SseSerializer serializer,
-  );
-
-  @protected
-  void sse_encode_box_autoadd_delete_project_request(
-    DeleteProjectRequest self,
-    SseSerializer serializer,
-  );
-
-  @protected
   void sse_encode_box_autoadd_display_payload(
     DisplayPayload self,
     SseSerializer serializer,
@@ -1365,18 +1081,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_box_autoadd_i_64(
     PlatformInt64 self,
-    SseSerializer serializer,
-  );
-
-  @protected
-  void sse_encode_box_autoadd_list_project_sessions_params(
-    ListProjectSessionsParams self,
-    SseSerializer serializer,
-  );
-
-  @protected
-  void sse_encode_box_autoadd_list_sessions_params(
-    ListSessionsParams self,
     SseSerializer serializer,
   );
 
@@ -1393,12 +1097,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
-  void sse_encode_box_autoadd_read_session_params(
-    ReadSessionParams self,
-    SseSerializer serializer,
-  );
-
-  @protected
   void sse_encode_box_autoadd_session_end_reason(
     SessionEndReason self,
     SseSerializer serializer,
@@ -1409,15 +1107,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_box_autoadd_u_32(int self, SseSerializer serializer);
-
-  @protected
-  void sse_encode_box_autoadd_u_64(BigInt self, SseSerializer serializer);
-
-  @protected
-  void sse_encode_box_autoadd_update_project_request(
-    UpdateProjectRequest self,
-    SseSerializer serializer,
-  );
 
   @protected
   void sse_encode_box_autoadd_user_summary(
@@ -1498,24 +1187,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
-  void sse_encode_create_project_request(
-    CreateProjectRequest self,
-    SseSerializer serializer,
-  );
-
-  @protected
-  void sse_encode_create_project_response(
-    CreateProjectResponse self,
-    SseSerializer serializer,
-  );
-
-  @protected
-  void sse_encode_delete_project_request(
-    DeleteProjectRequest self,
-    SseSerializer serializer,
-  );
-
-  @protected
   void sse_encode_display_payload(
     DisplayPayload self,
     SseSerializer serializer,
@@ -1523,24 +1194,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_error_kind(ErrorKind self, SseSerializer serializer);
-
-  @protected
-  void sse_encode_friend_request_status(
-    FriendRequestStatus self,
-    SseSerializer serializer,
-  );
-
-  @protected
-  void sse_encode_friend_request_summary(
-    FriendRequestSummary self,
-    SseSerializer serializer,
-  );
-
-  @protected
-  void sse_encode_friend_requests_response(
-    FriendRequestsResponse self,
-    SseSerializer serializer,
-  );
 
   @protected
   void sse_encode_friend_summary(FriendSummary self, SseSerializer serializer);
@@ -1591,24 +1244,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_lang(Lang self, SseSerializer serializer);
 
   @protected
-  void
-  sse_encode_list_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
-    List<SessionSummary> self,
-    SseSerializer serializer,
-  );
-
-  @protected
   void sse_encode_list_String(List<String> self, SseSerializer serializer);
 
   @protected
   void sse_encode_list_agent_descriptor(
     List<AgentDescriptor> self,
-    SseSerializer serializer,
-  );
-
-  @protected
-  void sse_encode_list_agent_session_summary_dto(
-    List<AgentSessionSummaryDto> self,
     SseSerializer serializer,
   );
 
@@ -1645,12 +1285,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_list_conversation_summary(
     List<ConversationSummary> self,
-    SseSerializer serializer,
-  );
-
-  @protected
-  void sse_encode_list_friend_request_summary(
-    List<FriendRequestSummary> self,
     SseSerializer serializer,
   );
 
@@ -1715,30 +1349,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
-  void sse_encode_list_project_sessions_params(
-    ListProjectSessionsParams self,
-    SseSerializer serializer,
-  );
-
-  @protected
-  void sse_encode_list_project_sessions_response(
-    ListProjectSessionsResponse self,
-    SseSerializer serializer,
-  );
-
-  @protected
-  void sse_encode_list_project_summary(
-    List<ProjectSummary> self,
-    SseSerializer serializer,
-  );
-
-  @protected
-  void sse_encode_list_projects_response(
-    ListProjectsResponse self,
-    SseSerializer serializer,
-  );
-
-  @protected
   void sse_encode_list_reaction_actor(
     List<ReactionActor> self,
     SseSerializer serializer,
@@ -1753,24 +1363,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_list_request_trace_record(
     List<RequestTraceRecord> self,
-    SseSerializer serializer,
-  );
-
-  @protected
-  void sse_encode_list_sessions_params(
-    ListSessionsParams self,
-    SseSerializer serializer,
-  );
-
-  @protected
-  void sse_encode_list_sessions_response(
-    ListSessionsResponse self,
-    SseSerializer serializer,
-  );
-
-  @protected
-  void sse_encode_list_ui_event_message(
-    List<UiEventMessage> self,
     SseSerializer serializer,
   );
 
@@ -1805,12 +1397,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_opt_String(String? self, SseSerializer serializer);
 
   @protected
-  void sse_encode_opt_box_autoadd_agent_name(
-    AgentName? self,
-    SseSerializer serializer,
-  );
-
-  @protected
   void sse_encode_opt_box_autoadd_artifact_ref(
     ArtifactRef? self,
     SseSerializer serializer,
@@ -1841,9 +1427,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_opt_box_autoadd_u_32(int? self, SseSerializer serializer);
 
   @protected
-  void sse_encode_opt_box_autoadd_u_64(BigInt? self, SseSerializer serializer);
-
-  @protected
   void sse_encode_opt_box_autoadd_user_summary(
     UserSummary? self,
     SseSerializer serializer,
@@ -1859,28 +1442,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
-  void sse_encode_project_summary(
-    ProjectSummary self,
-    SseSerializer serializer,
-  );
-
-  @protected
   void sse_encode_reaction_actor(ReactionActor self, SseSerializer serializer);
 
   @protected
   void sse_encode_reaction_group(ReactionGroup self, SseSerializer serializer);
-
-  @protected
-  void sse_encode_read_session_params(
-    ReadSessionParams self,
-    SseSerializer serializer,
-  );
-
-  @protected
-  void sse_encode_read_session_response(
-    ReadSessionResponse self,
-    SseSerializer serializer,
-  );
 
   @protected
   void sse_encode_request_trace_record(
@@ -1950,12 +1515,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_unit(void self, SseSerializer serializer);
-
-  @protected
-  void sse_encode_update_project_request(
-    UpdateProjectRequest self,
-    SseSerializer serializer,
-  );
 
   @protected
   void sse_encode_user_summary(UserSummary self, SseSerializer serializer);
