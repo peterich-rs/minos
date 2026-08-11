@@ -127,6 +127,7 @@ abstract class MinosCoreProtocol {
     required String text,
     String? replyToMessageId,
     String? clientMessageId,
+
     /// JSON array of wire MentionTarget objects (optional).
     String? mentionsJson,
   });

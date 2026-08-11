@@ -381,7 +381,8 @@ class SocialCacheStore {
     ChatMessageReplySummary? replyTo,
     List<String> mentionedAccountIds = const <String>[],
     List<String> mentionedAgentIds = const <String>[],
-    List<Map<String, Object?>> structuredMentions = const <Map<String, Object?>>[],
+    List<Map<String, Object?>> structuredMentions =
+        const <Map<String, Object?>>[],
   }) async {
     // client_message_id == localId: stable wire id for Hub idempotent insert.
     final clientMessageId = _newClientMessageId();
@@ -440,7 +441,8 @@ class SocialCacheStore {
     required String conversationId,
     required String text,
     String? replyToMessageId,
-    List<Map<String, Object?>> structuredMentions = const <Map<String, Object?>>[],
+    List<Map<String, Object?>> structuredMentions =
+        const <Map<String, Object?>>[],
   }) async {
     final payload = _userMessageOutboxPayload(
       text: text,
@@ -458,7 +460,8 @@ class SocialCacheStore {
   String _userMessageOutboxPayload({
     required String text,
     String? replyToMessageId,
-    List<Map<String, Object?>> structuredMentions = const <Map<String, Object?>>[],
+    List<Map<String, Object?>> structuredMentions =
+        const <Map<String, Object?>>[],
   }) {
     return jsonEncode(<String, Object?>{
       'text': text,

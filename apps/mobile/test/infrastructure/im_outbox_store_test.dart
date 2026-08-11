@@ -235,7 +235,10 @@ void main() {
         nowMs: t0,
       );
       expect(store.snapshot.single.payloadJson, payload);
-      expect(store.snapshot.single.payloadJson.contains('"kind":"bot"'), isTrue);
+      expect(
+        store.snapshot.single.payloadJson.contains('"kind":"bot"'),
+        isTrue,
+      );
       expect(store.snapshot.single.payloadJson.contains('id-claude'), isTrue);
     });
   });
