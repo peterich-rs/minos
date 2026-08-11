@@ -86,7 +86,7 @@ async function runConversationTurnEndRefresh(
     const { useAccountStore } = await import("@/store/account-store");
     const { isCloudImMode } = await import("@/shared/lib/cloud-timeline");
     const { projectMissingLocalAgentResultsToCloud, flushImOutbox } =
-      await import("@/shared/lib/im-cloud-sync");
+      await import("@/store/im/im-cloud-sync");
     const { toUiMessage } = await import("./helpers");
     const { daemonApi } = await import("@/shared/lib/daemon");
     const { session, authPhase } = useAccountStore.getState();

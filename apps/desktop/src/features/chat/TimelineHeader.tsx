@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { GitBranch, Layers } from "lucide-react";
-import type { Conversation } from "@/shared/lib/mock-data";
+import type { Conversation } from "@/shared/domain/collaboration";
 import {
   MetaChip,
   PriorityPlaceholder,

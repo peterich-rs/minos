@@ -4,7 +4,8 @@ import {
   AuxiliaryPanel,
   type AuxiliaryPanelLayout,
 } from "@/shared/layout/AuxiliaryPanel";
-import { agentMeta, type AgentSession } from "@/shared/lib/mock-data";
+import type { AgentSession } from "@/shared/domain/collaboration";
+import { agentMeta } from "@/shared/lib/mock-data";
 import { projectSessionFromEntity } from "@/shared/lib/session-entity";
 import { Avatar } from "@/shared/ui/Avatar";
 import { StatusPill } from "@/shared/ui/StatusPill";

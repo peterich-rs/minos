@@ -1,4 +1,4 @@
-import type { TimelineMessage } from "@/shared/lib/mock-data";
+import type { TimelineMessage } from "../domain/collaboration.ts";
 
 /** Host workbench cards that hang off Hub social order via anchor+suborder. */
 export function isHostOnlyTimelineCard(message: TimelineMessage): boolean {

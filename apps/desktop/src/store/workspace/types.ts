@@ -9,10 +9,10 @@ import type {
   ConversationProgress,
   DeliveryStatus,
   Project,
+  ProjectSession,
   TimelineMessage,
-  AgentSession,
   ConversationBoardColumn,
-} from "@/shared/lib/mock-data";
+} from "@/shared/domain/collaboration";
 import type {
   DaemonConnection,
   DaemonConversationEvent,
@@ -25,7 +25,7 @@ import type { ApprovalStatusPolicy } from "@/shared/lib/session-status";
 import type { MessageHistoryMeta } from "@/shared/lib/message-history";
 import type { TranscriptHistoryMeta } from "@/shared/lib/transcript-history";
 
-export type { SessionEntity };
+export type { SessionEntity, ProjectSession };
 
 export type DataSource = "mock" | "daemon";
 
@@ -41,14 +41,6 @@ export type ResourceFetchStatus = {
 /** @deprecated alias — use ResourceFetchStatus */
 export type ConversationDetailPhase = ResourceFetchPhase;
 export type ConversationDetailStatus = ResourceFetchStatus;
-
-export type ProjectSession = AgentSession & {
-  conversationTitle?: string;
-  firstTsMs?: number;
-  lastTsMs?: number;
-  /** Session last_seq — used to seek transcript tail. */
-  messageCount?: number;
-};
 
 export type SessionListSlice = {
   sessionsById: Record<string, SessionEntity>;

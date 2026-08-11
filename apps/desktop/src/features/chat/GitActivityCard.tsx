@@ -8,7 +8,7 @@ import {
   Layers,
   XCircle,
 } from "lucide-react";
-import type { TimelineGitActivity } from "@/shared/lib/mock-data";
+import type { TimelineGitActivity } from "@/shared/domain/collaboration";
 import { cn } from "@/shared/lib/utils";
 import { shortWorktree } from "./lib/format";
 

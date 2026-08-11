@@ -28,8 +28,8 @@ import { useReactionStore } from "@/features/chat/reaction-store";
 import {
   flushImOutbox,
   projectMissingLocalAgentResultsToCloud,
-} from "@/shared/lib/im-cloud-sync";
-import { pullCloudConversationMessagePage } from "@/shared/lib/im-cloud-inbound";
+} from "@/store/im/im-cloud-sync";
+import { pullCloudConversationMessagePage } from "@/store/im/im-cloud-inbound";
 import {
   isCloudImMode,
   mergeCloudAndLocalTimeline,
@@ -93,7 +93,7 @@ export function createTimelineActions(
           // Subscribe only — loadTimeline is the sole cold-hydrate writer.
           // (focusConversationOnCloud must not dual-merge the window.)
           if (linked) {
-            void import("@/shared/lib/im-cloud-bridge").then(
+            void import("@/store/im/im-cloud-bridge").then(
               ({ ensureConversationSubscribedOnCloud }) => {
                 ensureConversationSubscribedOnCloud(conversationId);
               },

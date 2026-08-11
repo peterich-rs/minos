@@ -7,8 +7,8 @@ import {
   type MentionHuman,
   type MentionProfile,
 } from "@/shared/lib/agent-route";
-import type { TimelineMessage } from "@/shared/lib/mock-data";
-import { membershipTokensOfBots } from "@/shared/lib/mock-data";
+import type { TimelineMessage } from "@/shared/domain/collaboration";
+import { membershipTokensOfBots } from "@/shared/domain/collaboration";
 import { hasPrimaryShortcutModifier } from "@/shared/lib/platform";
 import { cn } from "@/shared/lib/utils";
 import { toast } from "@/shared/lib/toast";

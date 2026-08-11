@@ -5,7 +5,7 @@
  * timeline map. Pure merges stay in shared/lib; this module owns the setState.
  */
 
-import type { TimelineMessage } from "@/shared/lib/mock-data";
+import type { TimelineMessage } from "@/shared/domain/collaboration";
 import {
   mergeCloudAndLocalTimeline,
   removeMessageFromTimeline,

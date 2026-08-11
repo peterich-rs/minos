@@ -9,7 +9,6 @@
  * Conversation shell upsert + host-runtime agent resolve remain.
  */
 
-import { useAccountStore } from "@/store/account-store";
 import {
   addAgentToConversation,
   ensureHostRuntimeAgent,
@@ -18,8 +17,9 @@ import {
   toggleCloudReaction,
   upsertConversation,
 } from "@/shared/lib/minos-cloud";
+import { getCloudAuth } from "@/shared/lib/cloud-auth";
 import { isCloudImMode } from "@/shared/lib/cloud-timeline";
-import { appendMessageOnCloud } from "@/shared/lib/im-cloud-bridge";
+import { appendMessageOnCloud } from "@/store/im/im-cloud-bridge";
 import {
   displayNameForRuntime,
   isCanonicalAgentResultId,
@@ -47,7 +47,7 @@ import {
 } from "@/shared/lib/im-outbox";
 import { daemonApi } from "@/shared/lib/daemon";
 import { toast } from "@/shared/lib/toast";
-import type { TimelineMessage } from "@/shared/lib/mock-data";
+import type { TimelineMessage } from "@/shared/domain/collaboration";
 
 export {
   displayNameForRuntime,
@@ -93,11 +93,16 @@ function cloudAuth(): {
   accessToken: string;
   accountId: string;
 } | null {
-  const { deviceId, session } = useAccountStore.getState();
-  const accessToken = session?.accessToken?.trim() ?? "";
-  const accountId = session?.accountId?.trim() ?? "";
+  const auth = getCloudAuth();
+  if (!auth) return null;
+  const accessToken = auth.accessToken.trim();
+  const accountId = auth.accountId.trim();
   if (!accessToken || !accountId) return null;
-  return { deviceId, accessToken, accountId };
+  return {
+    deviceId: auth.deviceId,
+    accessToken,
+    accountId,
+  };
 }
 
 function currentOutboxAccountId(): string {
@@ -466,13 +471,13 @@ async function postApprovalResolveFromOutbox(
       : { ...payload.decision };
   delete (decision as Record<string, unknown>).client_request_id;
 
-  const { session, authPhase } = useAccountStore.getState();
+  const authSnap = getCloudAuth();
   const cloudRoute =
     payload.route === "hub" ||
     (payload.route !== "daemon" &&
       isCloudImMode({
-        authPhase,
-        accessToken: session?.accessToken,
+        authPhase: authSnap?.authPhase,
+        accessToken: authSnap?.accessToken,
       }));
 
   try {
@@ -588,12 +593,12 @@ export async function syncApprovalResolve(input: {
   const decision = { ...input.decision };
   delete decision.client_request_id;
 
-  const { session, authPhase } = useAccountStore.getState();
+  const authSnap = getCloudAuth();
   const route =
     input.route ??
     (isCloudImMode({
-      authPhase,
-      accessToken: session?.accessToken,
+      authPhase: authSnap?.authPhase,
+      accessToken: authSnap?.accessToken,
     })
       ? "hub"
       : "daemon");
@@ -602,8 +607,7 @@ export async function syncApprovalResolve(input: {
   if (route === "hub" && !auth) {
     throw new Error("not authenticated");
   }
-  const accountId =
-    auth?.accountId ?? useAccountStore.getState().session?.accountId?.trim() ?? "";
+  const accountId = auth?.accountId ?? authSnap?.accountId?.trim() ?? "";
   if (!accountId) {
     throw new Error("not authenticated");
   }

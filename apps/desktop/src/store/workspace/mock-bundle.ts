@@ -6,8 +6,8 @@ import {
   projects as mockProjects,
   timelineByConversation as mockTimeline,
   agentSessions as mockSessions,
-  type TimelineMessage,
 } from "@/shared/lib/mock-data";
+import type { TimelineMessage } from "@/shared/domain/collaboration";
 import {
   entityNeedsAttention,
   mergeSessionEntity,

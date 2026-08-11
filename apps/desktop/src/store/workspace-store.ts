@@ -30,6 +30,7 @@ import {
   mergeTranscriptItems,
 } from "./workspace/helpers";
 import { createWorkspaceActions } from "./workspace/create-actions";
+import { registerDaemonCloudFlagsProvider } from "./daemon-status-port";
 
 export type {
   DataSource,
@@ -73,3 +74,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     },
   ),
 );
+
+// Account ensure reads host flags via this port — never imports workspace-store.
+registerDaemonCloudFlagsProvider(async () => {
+  await useWorkspaceStore.getState().refreshDaemonStatus();
+  const connection = useWorkspaceStore.getState().connection;
+  return {
+    cloudOnline: connection?.cloudOnline === true,
+    hasHostToken: connection?.hasHostToken === true,
+  };
+});

@@ -12,36 +12,6 @@ function useDaemonEnabled() {
   return source === "daemon";
 }
 
-export function useProjectsQuery() {
-  const enabled = useDaemonEnabled();
-  const bootEpoch = useWorkspaceStore((s) => s.bootEpoch);
-  return useQuery({
-    queryKey: [...queryKeys.projects, bootEpoch],
-    queryFn: () => daemonApi.listProjects(),
-    enabled,
-  });
-}
-
-export function useConversationsQuery(projectId: string) {
-  const enabled = useDaemonEnabled() && Boolean(projectId);
-  const bootEpoch = useWorkspaceStore((s) => s.bootEpoch);
-  return useQuery({
-    queryKey: [...queryKeys.conversations(projectId), bootEpoch],
-    queryFn: () => daemonApi.listConversations(projectId),
-    enabled,
-  });
-}
-
-export function useClisQuery() {
-  const enabled = useDaemonEnabled();
-  const bootEpoch = useWorkspaceStore((s) => s.bootEpoch);
-  return useQuery({
-    queryKey: [...queryKeys.clis, bootEpoch],
-    queryFn: () => daemonApi.listClis(),
-    enabled,
-  });
-}
-
 /**
  * Host daemon agent profile cache.
  * Offline buffer / session launch helper — **not** bot identity SSOT.

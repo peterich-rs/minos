@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronDown, ListFilter, MessageSquare, PanelLeftClose } from "lucide-react";
-import type { Conversation } from "@/shared/lib/mock-data";
+import type { Conversation } from "@/shared/domain/collaboration";
 import {
   matchesProgressFilter,
   progressFilterLabel,

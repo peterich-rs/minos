@@ -205,7 +205,7 @@ export function createConnectionActions(
         void quietHydrateAllConversationLists(get);
 
         // Hub IM bridge (Mobile → Desktop) if account already authenticated.
-        void import("@/shared/lib/im-cloud-bridge").then(({ ensureImCloudBridge }) =>
+        void import("@/store/im/im-cloud-bridge").then(({ ensureImCloudBridge }) =>
           ensureImCloudBridge(),
         );
       } catch (e) {

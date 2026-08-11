@@ -8,7 +8,7 @@ import {
   sessionIdFromAgentResultId,
   upsertCloudMessageIntoTimeline,
 } from "./cloud-timeline.ts";
-import type { TimelineMessage } from "./mock-data.ts";
+import type { TimelineMessage } from "../domain/collaboration.ts";
 import type { CloudChatMessage } from "./minos-cloud.ts";
 
 function local(

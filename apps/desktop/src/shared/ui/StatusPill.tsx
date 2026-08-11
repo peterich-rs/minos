@@ -1,6 +1,7 @@
 import { Loader2 } from "lucide-react";
 import { cn } from "@/shared/lib/utils";
-import { statusMeta, type SessionStatus } from "@/shared/lib/mock-data";
+import type { SessionStatus } from "../domain/collaboration.ts";
+import { statusMeta } from "@/shared/lib/mock-data";
 
 export function StatusPill({
   status,

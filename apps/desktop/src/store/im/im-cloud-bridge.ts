@@ -11,28 +11,29 @@ import {
   CloudRealtimeSession,
   type CloudRealtimeSyncState,
 } from "@/shared/lib/cloud-realtime";
-import { mapCloudChatMessageToTimeline } from "@/shared/lib/im-cloud-inbound";
+import { mapCloudChatMessageToTimeline } from "@/store/im/im-cloud-inbound";
 import { isCloudImMode } from "@/shared/lib/cloud-timeline";
 import {
   startImOutboxWorker,
   stopImOutboxWorker,
-} from "@/shared/lib/im-cloud-sync";
+} from "@/store/im/im-cloud-sync";
 import {
   pullCloudConversationMessagePage,
   pullCloudForwardGap,
-} from "@/shared/lib/im-cloud-inbound";
+} from "@/store/im/im-cloud-inbound";
 import {
   MESSAGE_PAGE_SIZE,
   firstMessageSeq,
   lastMessageSeq,
 } from "@/shared/lib/message-history";
 import { cloudDigestCache } from "@/shared/lib/cloud-digest-cache";
-import { ensureCloudDigestHydrated } from "@/shared/lib/cloud-digest-ensure";
+import { ensureCloudDigestHydrated } from "@/store/im/cloud-digest-ensure";
 import {
   positiveMs,
   railActivityFromTimeline,
   resolveDigestLastActivityMs,
 } from "@/shared/lib/rail-activity";
+import { getCloudAuth } from "@/shared/lib/cloud-auth";
 import { useAccountStore } from "@/store/account-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import {
@@ -41,7 +42,7 @@ import {
   replaceWindowFromHydrate,
 } from "@/store/workspace/timeline-write";
 import type { CloudChatMessage } from "@/shared/lib/minos-cloud";
-import type { TimelineMessage } from "@/shared/lib/mock-data";
+import type { TimelineMessage } from "@/shared/domain/collaboration";
 
 let session: CloudRealtimeSession | null = null;
 let startedForToken: string | null = null;
@@ -277,8 +278,7 @@ function patchRailFromDigest(input: {
     preview = input.preview?.trim() || prevDigest?.preview || null;
   }
 
-  const myAccountId =
-    useAccountStore.getState().session?.accountId?.trim() ?? "";
+  const myAccountId = getCloudAuth()?.accountId?.trim() ?? "";
   const isOwn =
     Boolean(myAccountId) && input.senderAccountId === myAccountId;
   let unread = prevDigest?.unreadCount ?? 0;
@@ -517,13 +517,18 @@ async function reconcileConversationFromCloud(
 
 /** Start or refresh hub WS when Minos account session is available. */
 export function ensureImCloudBridge(): void {
-  const { deviceId, session: account, authPhase } = useAccountStore.getState();
-  if (authPhase !== "authenticated" || !account?.accessToken?.trim()) {
+  const auth = getCloudAuth();
+  if (
+    !auth ||
+    auth.authPhase !== "authenticated" ||
+    !auth.accessToken.trim()
+  ) {
     stopImCloudBridge();
     return;
   }
-  const token = account.accessToken;
-  const accountId = account.accountId ?? "";
+  const deviceId = auth.deviceId;
+  const token = auth.accessToken;
+  const accountId = auth.accountId;
   if (session && startedForToken === token) {
     session.updateAuth(deviceId, token, accountId);
     // Keep focused conversation subscribed.
@@ -547,8 +552,7 @@ export function ensureImCloudBridge(): void {
     onMessageReactions: ({ messageId, reactions }) => {
       void import("@/features/chat/reaction-store").then(({ useReactionStore }) => {
         // Durable wire is viewer-neutral; recompute reactedByMe from local account.
-        const myAccountId =
-          useAccountStore.getState().session?.accountId?.trim() ?? "";
+        const myAccountId = getCloudAuth()?.accountId?.trim() ?? "";
         useReactionStore.getState().applyServerReactions(
           messageId,
           reactions.map((g) => {
@@ -717,11 +721,11 @@ export function tryAppendMessageOnCloud(input: {
 export function ensureConversationSubscribedOnCloud(conversationId: string): void {
   if (!conversationId.trim()) return;
   ensureImCloudBridge();
-  const { session: account, authPhase } = useAccountStore.getState();
+  const auth = getCloudAuth();
   if (
     !isCloudImMode({
-      authPhase,
-      accessToken: account?.accessToken,
+      authPhase: auth?.authPhase,
+      accessToken: auth?.accessToken,
     })
   ) {
     return;
@@ -745,20 +749,21 @@ export async function recallMessageOnCloud(
   conversationId: string,
   messageId: string,
 ): Promise<void> {
-  const { deviceId, session, authPhase } = useAccountStore.getState();
+  const auth = getCloudAuth();
   if (
+    !auth ||
     !isCloudImMode({
-      authPhase,
-      accessToken: session?.accessToken,
+      authPhase: auth.authPhase,
+      accessToken: auth.accessToken,
     }) ||
-    !session?.accessToken
+    !auth.accessToken
   ) {
     throw new Error("Hub recall requires authenticated account");
   }
   const { recallCloudMessage } = await import("@/shared/lib/minos-cloud");
   const recalled = await recallCloudMessage(
-    deviceId,
-    session.accessToken,
+    auth.deviceId,
+    auth.accessToken,
     conversationId,
     messageId,
   );

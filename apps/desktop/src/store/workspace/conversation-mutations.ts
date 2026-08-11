@@ -19,9 +19,9 @@ import {
   parseProgress,
   progressForBoardColumn,
 } from "@/shared/lib/conversation-meta";
-import type { Conversation, Project } from "@/shared/lib/mock-data";
-import { runtimesOfBots } from "@/shared/lib/mock-data";
-import { syncConversationToCloud } from "@/shared/lib/im-cloud-sync";
+import type { Conversation, Project } from "@/shared/domain/collaboration";
+import { runtimesOfBots } from "@/shared/domain/collaboration";
+import { syncConversationToCloud } from "@/store/im/im-cloud-sync";
 
 export function createConversationMutationActions(
   set: WorkspaceSet,

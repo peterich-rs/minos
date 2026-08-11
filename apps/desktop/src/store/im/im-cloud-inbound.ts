@@ -14,10 +14,10 @@ import {
   type CloudChatMessage,
   type CloudMessagePage,
 } from "@/shared/lib/minos-cloud";
+import { getCloudAuth } from "@/shared/lib/cloud-auth";
 import { cloudChatMessageToTimeline } from "@/shared/lib/cloud-timeline";
-import { useAccountStore } from "@/store/account-store";
-import { markMessageProjected } from "@/shared/lib/im-cloud-sync";
-import type { TimelineMessage } from "@/shared/lib/mock-data";
+import { markMessageProjected } from "@/store/im/im-cloud-sync";
+import type { TimelineMessage } from "@/shared/domain/collaboration";
 import { MESSAGE_PAGE_SIZE } from "@/shared/lib/message-history";
 
 /** cloud agent_id → runtime bin name (codex/claude/…) */
@@ -26,9 +26,9 @@ let agentsLoadedAt = 0;
 const AGENTS_TTL_MS = 60_000;
 
 function cloudAuth(): { deviceId: string; accessToken: string } | null {
-  const { deviceId, session } = useAccountStore.getState();
-  if (!session?.accessToken?.trim()) return null;
-  return { deviceId, accessToken: session.accessToken };
+  const auth = getCloudAuth();
+  if (!auth?.accessToken?.trim()) return null;
+  return { deviceId: auth.deviceId, accessToken: auth.accessToken };
 }
 
 export async function ensureAgentRuntimeMap(): Promise<Map<string, string>> {

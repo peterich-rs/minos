@@ -10,7 +10,7 @@
  * lifecycle without a newer lastTsMs (or an authoritative manager path).
  */
 
-import type { AgentRuntime, SessionStatus } from "./mock-data.ts";
+import type { AgentRuntime, SessionStatus } from "../domain/collaboration.ts";
 import type { ApprovalStatusPolicy } from "./session-status.ts";
 
 export type SessionEntity = {

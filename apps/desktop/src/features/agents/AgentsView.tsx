@@ -17,7 +17,8 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { agentMeta, type AgentRuntime } from "@/shared/lib/mock-data";
+import type { AgentRuntime } from "@/shared/domain/collaboration";
+import { agentMeta } from "@/shared/lib/mock-data";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import { useAccountStore } from "@/store/account-store";
 import { daemonApi, isTauriRuntime } from "@/shared/lib/daemon";

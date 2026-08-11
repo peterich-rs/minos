@@ -41,7 +41,7 @@
 | Markdown | `react-markdown` + `remark-gfm` + Shiki `CodeBlock` | 完成态 GFM；streaming 纯文本；fenced code 懒加载 Shiki 高亮 |
 | 主题 | Shiki theme JSON → CSS vars（`ThemeProvider`） | Host → Appearance 选主题/强调色；FOUC 用 localStorage 缓存 vars；默认 `minos`（warm） |
 | 长列表 | `@tanstack/react-virtual`（侧栏）+ `virtua`（conversation timeline） | ConversationList + **Sessions 左栏**（`SessionListPane` + flatten 树）用 `VirtualizedList`；主时间线 `VList` + stick-to-bottom/`shift` prepend；session **transcript** 仍分页 DOM（硬上限 2000），避免与审批/流式测高互殴。**Keep-alive 注意**：Work 三页用 CSS `hidden` 挂载；虚拟列表在 `display:none` 下 scrollport 高度为 0，切回 tab 时必须 remount 或 `measure()`（`VirtualizedList` 在 0→有高度时重测 + 仅在 tab active 时挂载侧栏 virtualizer），否则会出现空白/条目挤在底部、要点一下才出来 |
-| 状态 | Zustand 5 + TanStack Query 5 | **混合**：RQ 可缓存 catalog 网络；**会 merge 进 SessionEntity 的 list**（inspector / project sessions）一律 `staleTime: 0`，禁止 30s 陈旧 lifecycle。Zustand 管 timeline/transcript/SessionEntity/乐观发送/UI 指针（L0–L6）。**SessionEntity 唯一写漏斗**：`mergeSessionEntity` / `patchSessionEntity` → `commitSessionEntity`（membership 投影 + `conversation.runningCount/approvalCount` 由 Entity Σ 重算）。list hydrate 是 sample（防 stale demote）；manager / resume / resolve 为 authoritative。Inspector 列表只读投影行，禁止组件层再 overlay 全表 Entity。 |)
+| 状态 | Zustand 5 + TanStack Query 5 | **混合**：RQ 是 store loader 的 transport 缓存，**不是** projects/conversations/clis UI SSOT。**会 merge 进 SessionEntity 的 list**（inspector / project sessions）一律 `staleTime: 0`，禁止 30s 陈旧 lifecycle。Zustand 管 timeline/transcript/SessionEntity/乐观发送/UI 指针（L0–L6）。**SessionEntity 唯一写漏斗**：`mergeSessionEntity` / `patchSessionEntity` → `commitSessionEntity` / `commitHydratedSessionEntities`（membership 投影 + `conversation.runningCount/approvalCount` 由 Entity Σ 重算）。list hydrate 是 sample（防 stale demote）；manager / resume / resolve 为 authoritative。Inspector 列表只读投影行，禁止组件层再 overlay 全表 Entity。 |)
 | 图标 | Lucide React | 导航与工具栏 |
 | 本机 API | `@tauri-apps/api` | `invoke` → Rust |
 | 自动更新 | `tauri-plugin-updater` + `plugin-process` | 仅 release 构建启用；见 [desktop-auto-update.md](./desktop-auto-update.md) |
@@ -161,6 +161,8 @@ apps/desktop/
         lib/agentConfigProjection.ts  # pure map: list_clis/list_models → UI options
       host/                      # HostView.tsx · identity + cloud status (auto-connect; no link CTA)
         lib/host-link-flow.ts    # pure prepare→sign→cloud→apply orchestration
+        lib/ensure-host-connection.ts  # registerHostCredential + waitForCloudOnline ports
+        lib/host-connection-machine.ts # pure ensure decision (noop/wait/register) + effect run
         lib/host-account-presenter.ts  # Local only / Linked / Error (+ defensive signed out)
       chat/                      # Conversation chat UI (Wave 1–2)
         Timeline.tsx             # thin container: load/poll + compose children
@@ -200,18 +202,16 @@ apps/desktop/
         host-status.ts           # Ready · Local only / Linked / This Mac
         account-session.ts       # MinosSession + HostLinkState localStorage
         minos-cloud.ts           # /v1/auth/* + /v1/hosts/* + Hub IM HTTP
-        im-cloud-sync.ts         # Hub shell upsert + user/agent_result Outbox (host_projection uplink)
+        cloud-auth.ts            # process-local getCloudAuth port (registered by account-store)
         im-outbox.ts             # durable Tauri SQLite Outbox (user_message | agent_result | reaction_toggle | approval_resolve); intent lanes
-        im-cloud-inbound.ts      # Hub cold pull → TimelineMessage[] (no daemon append)
         cloud-timeline.ts          # mergeCloudAndLocalTimeline (Hub chat + local tool/git; same-id only)
         cloud-cursors.ts           # per-topic topic_seq resume_after (localStorage)
-        cloud-realtime.ts          # Sync SM + account/conversation Subscribe + SnapshotRequired
+        cloud-realtime.ts          # pure transport Sync SM (no store import)
         cloud-digest-cache.ts      # Hub list digests: hydrate once, live patchOne
-        conversation-list-merge.ts # daemon rows ∥ Hub digests (isCloudImMode ≠ host-linked)
-        im-cloud-bridge.ts         # auth → realtime → timeline + rail digest patch
+        conversation-list-merge.ts # daemon rows ∥ Hub digests; unreadSource hub|local
         # 协作气泡：Hub 是唯一权威，Desktop 只维护投影与 Outbox
         supabase.ts              # optional Supabase email/password IdP
-        mock-data.ts
+        mock-data.ts             # fixtures + presentation maps only
         toast.ts                 # sonner wrappers
         use-stick-to-bottom.ts
         scroll-restore.ts        # identity-based prepend restore
@@ -225,10 +225,19 @@ apps/desktop/
         daemon-events.ts         # listen daemon://ingest|manager|conversation|push-status
         initial-render-ready.ts  # emit first-layout event so host can show window
         daemon.ts · agent-route.ts · …
+      domain/
+        collaboration.ts         # Project / Conversation / TimelineMessage / ProjectSession
     store/                       # L0–L6 工作区契约不变；chat reactions 不进 workspace
       ui-store.ts                # nav + drafts + replyTo + commandPaletteOpen
-      account-store.ts           # Minos session + auto cloud ensure (sign-in / Online·Offline)
-      workspace-store.ts         # thin create() + re-export useWorkspaceStore
+      account-store.ts           # Minos session + host ensure delegate (sign-in / Online·Offline)
+      daemon-status-port.ts      # narrow host flags port (breaks account↔workspace cycle)
+      leave-account-scope.ts     # sole account-boundary teardown
+      workspace-store.ts         # thin create() + register daemon flags provider
+      im/
+        im-cloud-bridge.ts       # auth → realtime → timeline + rail digest patch
+        im-cloud-sync.ts         # Hub shell upsert + Outbox drain (uses getCloudAuth)
+        im-cloud-inbound.ts      # Hub cold pull → TimelineMessage[]
+        cloud-digest-ensure.ts   # single-flight digest hydrate
       workspace/
         types.ts                 # WorkspaceState / ResourceFetchStatus / ProjectSession
         helpers.ts               # barrel re-export (stable import path)
@@ -241,7 +250,7 @@ apps/desktop/
         shared.ts                # quietRefresh / startNewAgentSession helpers
         create-actions.ts        # compose L1–L6 action factories
         connection.ts            # L1 bootstrap / livePush / refreshProjects
-        conversation-list.ts     # L3a ConversationList
+        conversation-list.ts     # L3a ConversationList (Hub-primary unread when IM mode)
         timeline.ts              # L3a Timeline
         inspector.ts             # L3a Inspector
         session-list.ts          # L3b SessionList
@@ -280,7 +289,8 @@ apps/desktop/
 | Reply draft（Wave 2） | `ui-store.replyToMessageIdByConversation`；Composer 显示 reply chip；`sendMessage(..., { replyToMessageId })` 写乐观行；daemon append 尚未持久化 reply_to |
 | Follow 迟滞 | unfollow 80px / re-follow 12px；wheel-up 后 ~320ms 禁止 re-follow 与 pin，减轻到底回弹再上滑的抢滚动 |
 | Project tab 切换 | Conversations / Sessions / Board **keep-alive**（`hidden` + `inert`，不 unmount）；有缓存时 transcript **quiet append**；`useLayoutEffect` 首帧 pin 到底。**Sessions keep-alive 不得**在 Conversations 下 `selectSession(null)` / auto-select（否则抹掉 Inspector 点选 SessionDetail）。`loadTranscript` quiet peek **不 bump** generation，避免与 hard open 竞态丢弃整页；打开 session 必建 `transcriptsBySession` key 供 ingest 合并 |
-| Session 状态 | **L4 `sessionsById`（SessionEntity）为 status / hasPendingApproval 唯一真相**；`sessionsByConversation` / `projectSessionsByProject` / Attention 经 `projectEntityIntoLists` 投影。hydrate：RQ 缓存 list 索引 → upsert Entity → `rowsFromEntities` 同步兄弟 list。无 `projectSessions` 全局镜像。SessionList **只** `listProjectSessions(projectId)`（`queryKeys.projectSessions`）；Inspector **只** `listSessions(conversationId)`（`queryKeys.inspectorSessions`）；Attention 打开再跨 project hydrate（**不**驱动侧栏 badge） |
+| Session 状态 | **L4 `sessionsById`（SessionEntity）为 status / hasPendingApproval 唯一真相**；`sessionsByConversation` / `projectSessionsByProject` / Attention 经 `projectEntityIntoLists` 投影。hydrate：store loader 经 RQ `fetchQuery`（`staleTime: 0`）拉 list → upsert Entity → **必须** `commitHydratedSessionEntities` / `commitSessionEntity` 写回（禁止 ad-hoc `sessionsById` 旁路）。无 `projectSessions` 全局镜像。SessionList **只** `listProjectSessions(projectId)`（`queryKeys.projectSessions`）；Inspector **只** `listSessions(conversationId)`（`queryKeys.inspectorSessions`）；Attention 打开再跨 project hydrate（**不**驱动侧栏 badge） |
+| Conversation rail unread | Authenticated Hub IM：`unreadSource: "hub"`（digest / live patch 为 SSOT）；daemon 只补 host-local 字段，不得覆盖 Hub unread。未登录 / daemon-only：`unreadSource: "local"` |
 | Live status | Manager / ingest 经 Entity 写入；`hasPendingApproval` 抬 `needs_approval`，manager 不得在 pending 时降级。Transcript 淘汰后审批 fallback 看 Entity。**`livePush===true` 时不 setInterval 盲刷**；pump 结束 emit `daemon://push-status` → `livePush=false` 恢复 Timeline/Sessions 降级 quiet poll |
 | Attention badge | Σ `project.needsAttention`；bootstrap / refreshProjects 后 **quiet** `loadConversations` 全 known projects（有界并发），用 DTO `approvalCount`+unread 聚合；**不**常驻 Attention 队列 |
 | ensureLoaded | per-key single-flight（`shared/lib/desktop-inflight.ts`）；Timeline hardMax 500 / Transcript hardMax 2000；resume 去重用模块 Set（禁止 `window.__minos*`） |

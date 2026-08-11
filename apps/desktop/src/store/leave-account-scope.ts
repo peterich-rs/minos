@@ -12,13 +12,13 @@
 import { minosQueryClient } from "@/shared/api/queryClient";
 import { cloudDigestCache } from "@/shared/lib/cloud-digest-cache";
 import { clearAllTopicCursors } from "@/shared/lib/cloud-cursors";
-import { cancelCloudDigestHydrate } from "@/shared/lib/cloud-digest-ensure";
+import { cancelCloudDigestHydrate } from "@/store/im/cloud-digest-ensure";
 import { daemonApi, isTauriRuntime } from "@/shared/lib/daemon";
-import { stopImCloudBridge } from "@/shared/lib/im-cloud-bridge";
+import { stopImCloudBridge } from "@/store/im/im-cloud-bridge";
 import {
   resetImCloudSyncState,
   stopImOutboxWorker,
-} from "@/shared/lib/im-cloud-sync";
+} from "@/store/im/im-cloud-sync";
 import { useUiStore } from "@/store/ui-store";
 import { emptyWorkspace } from "@/store/workspace/empty-workspace";
 import { resetWorkspaceModuleState } from "@/store/workspace/reset-workspace-state";

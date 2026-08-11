@@ -6,7 +6,7 @@
  * the recalled row's original timestamp).
  */
 
-import type { TimelineMessage } from "./mock-data.ts";
+import type { TimelineMessage } from "../domain/collaboration.ts";
 
 export type RailActivity = {
   lastMessageAtMs: number;

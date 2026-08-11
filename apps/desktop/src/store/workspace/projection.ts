@@ -4,7 +4,7 @@
  * Sole write funnel: merge/patch Entity → commitSessionEntity →
  * membership lists + conversation running/approval aggregates from Entity Σ.
  */
-import type { Conversation, Project } from "@/shared/lib/mock-data";
+import type { Conversation, Project } from "@/shared/domain/collaboration";
 import type { SessionEntity } from "@/shared/lib/session-entity";
 import {
   conversationAggregatesFromEntities,
