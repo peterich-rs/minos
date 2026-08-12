@@ -334,6 +334,7 @@ export function createUseCasesActions(
   | "respondOpencodePermission"
   | "respondOpencodeQuestion"
   | "markConversationRead"
+  | "clearFocusedConversation"
   | "sendMessage"
   | "retryFailedMessage"
 > {
@@ -539,26 +540,47 @@ export function createUseCasesActions(
       const { isCloudImMode } = await import("@/shared/lib/cloud-timeline");
       const { lastMessageSeq } = await import("@/shared/lib/message-history");
       const { useAccountStore } = await import("@/store/account-store");
-      const { deviceId, session, authPhase } = useAccountStore.getState();
-      if (
-        !isCloudImMode({
-          authPhase,
-          accessToken: session?.accessToken,
-        }) ||
-        !session?.accessToken
-      ) {
-        return;
+      // Cold-start: Timeline mark-read can race hydrateAuth / loadTimeline.
+      // Wait briefly for auth + an observed Hub seq before giving up.
+      let deviceId = "";
+      let accessToken = "";
+      let observedSeq: number | null = null;
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        if (get().focusedConversationId !== conversationId) return;
+        const { deviceId: did, session, authPhase, hydrated } =
+          useAccountStore.getState();
+        deviceId = did;
+        if (!hydrated) {
+          await new Promise((r) => setTimeout(r, 100));
+          continue;
+        }
+        if (
+          !isCloudImMode({
+            authPhase,
+            accessToken: session?.accessToken,
+          }) ||
+          !session?.accessToken
+        ) {
+          return;
+        }
+        accessToken = session.accessToken;
+        const timeline = get().messagesByConversation[conversationId] ?? [];
+        observedSeq = lastMessageSeq(timeline);
+        if (observedSeq != null && observedSeq > 0) break;
+        await new Promise((r) => setTimeout(r, 150));
       }
-      const timeline = get().messagesByConversation[conversationId] ?? [];
-      const observedSeq = lastMessageSeq(timeline);
-      if (observedSeq == null || observedSeq <= 0) {
-        // No Hub seq loaded yet — skip HTTP; local rail already cleared.
+      if (
+        !accessToken ||
+        observedSeq == null ||
+        observedSeq <= 0 ||
+        get().focusedConversationId !== conversationId
+      ) {
         return;
       }
       try {
         await cloud.markCloudConversationRead(
           deviceId,
-          session.accessToken,
+          accessToken,
           conversationId,
           observedSeq,
         );
@@ -566,6 +588,13 @@ export function createUseCasesActions(
         console.warn("[workspace] hub mark-read failed", error);
       }
     });
+  },
+
+  clearFocusedConversation: (conversationId) => {
+    const focused = get().focusedConversationId;
+    if (!focused) return;
+    if (conversationId && focused !== conversationId) return;
+    set({ focusedConversationId: null });
   },
 
   sendMessage: async (conversationId, body, messageId, options) => {

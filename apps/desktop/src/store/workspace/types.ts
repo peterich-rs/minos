@@ -211,6 +211,8 @@ export type WorkspaceState = {
   ) => Promise<void>;
   /** Mark conversation messages as read (clears unread badge). */
   markConversationRead: (conversationId: string) => void;
+  /** Clear focus when Timeline unmounts / navigates away. */
+  clearFocusedConversation: (conversationId?: string) => void;
   clearActionError: () => void;
   sendMessage: (
     conversationId: string,

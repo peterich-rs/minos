@@ -160,6 +160,8 @@ describe("im-outbox", () => {
     assert.equal(classifyOutboxFailure("HTTP 400"), "permanent");
     assert.equal(classifyOutboxFailure("invalid_payload_json"), "permanent");
     assert.equal(classifyOutboxFailure("HTTP 429 rate limit"), "transient");
+    assert.equal(classifyOutboxFailure("unauthorized"), "transient");
+    assert.equal(classifyOutboxFailure("HTTP 401"), "transient");
   });
 
   it("reclaims stale inflight so kill mid-flight becomes due again", async () => {

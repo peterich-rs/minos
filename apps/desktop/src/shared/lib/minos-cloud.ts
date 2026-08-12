@@ -5,6 +5,8 @@
  * D02 same-account host link). Device role is `desktop-console`.
  */
 
+import { ensureFreshCloudAccessToken } from "@/shared/lib/cloud-auth";
+
 const DEFAULT_BACKEND_URL = "http://127.0.0.1:8787";
 
 export type AuthResponse = {
@@ -112,8 +114,22 @@ function errorFromPayload(
 async function requestJson<T>(
   path: string,
   init: RequestInit,
+  opts?: { _retried401?: boolean },
 ): Promise<T> {
   const response = await fetch(`${backendHttpBase()}${path}`, init);
+  if (
+    response.status === 401 &&
+    !opts?._retried401 &&
+    !path.includes("/v1/auth/refresh") &&
+    !path.includes("/v1/auth/logout")
+  ) {
+    const nextToken = await ensureFreshCloudAccessToken();
+    if (nextToken) {
+      const headers = new Headers(init.headers);
+      headers.set("authorization", `Bearer ${nextToken}`);
+      return requestJson(path, { ...init, headers }, { _retried401: true });
+    }
+  }
   if (!response.ok) {
     const payload = await parseErrorPayload(response);
     throw errorFromPayload(response.status, payload);

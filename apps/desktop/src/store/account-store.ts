@@ -42,7 +42,10 @@ import {
 import { daemonApi } from "@/shared/lib/daemon";
 import { runHostEnsure } from "@/features/host/lib/host-connection-machine";
 import type { DesktopAuthPhase } from "@/shared/lib/desktop-root-gate";
-import { registerCloudAuthProvider } from "@/shared/lib/cloud-auth";
+import {
+  registerCloudAccessTokenRefresher,
+  registerCloudAuthProvider,
+} from "@/shared/lib/cloud-auth";
 import {
   bumpAccountScopeGeneration,
   leaveAccountScope,
@@ -123,6 +126,69 @@ let ensureInFlight: Promise<void> | null = null;
 let ensureGeneration = 0;
 let hydrateInFlight: Promise<void> | null = null;
 let hydrateGeneration = 0;
+let accessTokenRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+let accessTokenRefreshInFlight: Promise<string | null> | null = null;
+type AccountStoreApi = {
+  getState: () => AccountState;
+  setState: (
+    partial:
+      | Partial<AccountState>
+      | ((state: AccountState) => Partial<AccountState>),
+  ) => void;
+};
+let accountStoreApi: AccountStoreApi | null = null;
+
+function clearAccessTokenRefreshTimer(): void {
+  if (accessTokenRefreshTimer) {
+    clearTimeout(accessTokenRefreshTimer);
+    accessTokenRefreshTimer = null;
+  }
+}
+
+function scheduleAccessTokenRefresh(session: MinosSession): void {
+  clearAccessTokenRefreshTimer();
+  const expiresAt = session.issuedAtMs + session.expiresInSec * 1000;
+  // Refresh 90s before expiry (isAccessTokenFresh uses 60s skew).
+  const delay = Math.max(5_000, expiresAt - Date.now() - 90_000);
+  accessTokenRefreshTimer = setTimeout(() => {
+    void ensureFreshAccessTokenInternal();
+  }, delay);
+}
+
+async function ensureFreshAccessTokenInternal(): Promise<string | null> {
+  if (accessTokenRefreshInFlight) return accessTokenRefreshInFlight;
+  accessTokenRefreshInFlight = (async () => {
+    const api = accountStoreApi;
+    if (!api) return null;
+    const state = api.getState();
+    const session = state.session;
+    if (!session?.refreshToken?.trim()) return null;
+    if (isAccessTokenFresh(session)) {
+      scheduleAccessTokenRefresh(session);
+      return session.accessToken;
+    }
+    try {
+      const tokens = await refreshSession(state.deviceId, session.refreshToken);
+      const next: MinosSession = {
+        ...session,
+        accessToken: tokens.access_token,
+        refreshToken: tokens.refresh_token,
+        expiresInSec: tokens.expires_in,
+        issuedAtMs: Date.now(),
+      };
+      saveStoredSession(next);
+      api.setState({ session: next });
+      scheduleAccessTokenRefresh(next);
+      return next.accessToken;
+    } catch (error) {
+      console.warn("[account-store] access token refresh failed", error);
+      return null;
+    }
+  })().finally(() => {
+    accessTokenRefreshInFlight = null;
+  });
+  return accessTokenRefreshInFlight;
+}
 
 function applyAuthSuccess(
   set: (
@@ -164,6 +230,7 @@ function applyAuthSuccess(
   );
   const forceReregister =
     !hostOwned || prevAccountId !== nextAccountId || !hostBind.bound;
+  scheduleAccessTokenRefresh(session);
   void get().ensureCloudConnection(
     forceReregister ? { forceReregister: true } : undefined,
   );
@@ -223,6 +290,7 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
           authPhase: "authenticated",
           hydrated: true,
         });
+        scheduleAccessTokenRefresh(stored);
         void import("@/store/im/im-cloud-bridge").then(({ ensureImCloudBridge }) =>
           ensureImCloudBridge(),
         );
@@ -313,6 +381,7 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
   },
 
   signOut: async () => {
+    clearAccessTokenRefreshTimer();
     const { session, deviceId } = get();
     set({ busy: true, error: null });
     ensureGeneration += 1;
@@ -489,6 +558,11 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
   },
 }));
 
+accountStoreApi = {
+  getState: () => useAccountStore.getState(),
+  setState: (partial) => useAccountStore.setState(partial),
+};
+
 // Shared transport reads auth via this port — never imports account-store.
 registerCloudAuthProvider(() => {
   const { deviceId, session, authPhase } = useAccountStore.getState();
@@ -502,3 +576,5 @@ registerCloudAuthProvider(() => {
     authPhase,
   };
 });
+
+registerCloudAccessTokenRefresher(() => ensureFreshAccessTokenInternal());
