@@ -30,7 +30,10 @@ class ConversationsController extends AsyncNotifier<ConversationsResponse> {
     // Arm SnapshotRequired consumer for app lifetime (Inbox/Timeline).
     ref.watch(imSnapshotSyncProvider);
 
-    _eventsSub ??= ref
+    // Always (re)bind on build so provider invalidate after reconnect does not
+    // leave a cancelled/completed subscription (C1).
+    await _eventsSub?.cancel();
+    _eventsSub = ref
         .read(socialRepositoryProvider)
         .socialEvents
         .listen(
@@ -45,9 +48,15 @@ class ConversationsController extends AsyncNotifier<ConversationsResponse> {
           onError: (Object error, StackTrace stackTrace) {
             // Connection errors: soft; next hydrate corrects.
           },
-          onDone: () {},
+          onDone: () {
+            // Stream ended unexpectedly — clear so a later rebuild rebinds.
+            _eventsSub = null;
+          },
         );
-    ref.onDispose(() => _eventsSub?.cancel());
+    ref.onDispose(() {
+      unawaited(_eventsSub?.cancel() ?? Future<void>.value());
+      _eventsSub = null;
+    });
 
     // Start IM outbox worker once conversations hydrate; wire UI refresh hooks.
     final outbox = ref.read(imOutboxWorkerProvider);

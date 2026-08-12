@@ -14,7 +14,7 @@ class SocialCacheStore {
   SocialCacheStore();
 
   static const _dbName = 'social_cache.db';
-  static const _dbVersion = 7;
+  static const _dbVersion = 8;
 
   Future<Database?>? _databaseFuture;
 
@@ -126,6 +126,14 @@ class SocialCacheStore {
               "ALTER TABLE cached_social_messages ADD COLUMN mentioned_agent_ids_json TEXT NOT NULL DEFAULT '[]'",
             );
           }
+          if (oldVersion < 8) {
+            await db.execute(
+              "ALTER TABLE im_outbox ADD COLUMN account_id TEXT NOT NULL DEFAULT ''",
+            );
+            await db.execute(
+              'CREATE INDEX IF NOT EXISTS idx_im_outbox_account_due ON im_outbox(account_id, status, next_attempt_at_ms)',
+            );
+          }
         },
       );
     } catch (_) {
@@ -137,6 +145,7 @@ class SocialCacheStore {
     await db.execute('''
       CREATE TABLE IF NOT EXISTS im_outbox (
         client_op_id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL DEFAULT '',
         kind TEXT NOT NULL,
         conversation_id TEXT NOT NULL,
         payload_json TEXT NOT NULL,
@@ -151,6 +160,23 @@ class SocialCacheStore {
     await db.execute(
       'CREATE INDEX IF NOT EXISTS idx_im_outbox_due ON im_outbox(status, next_attempt_at_ms)',
     );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_im_outbox_account_due ON im_outbox(account_id, status, next_attempt_at_ms)',
+    );
+  }
+
+  /// Wipe social cache + outbox on logout so drafts cannot send as another account.
+  Future<void> clearAllForLogout() async {
+    final db = await _database();
+    if (db == null) {
+      return;
+    }
+    await db.transaction((txn) async {
+      await txn.delete('im_outbox');
+      await txn.delete('cached_social_messages');
+      await txn.delete('cached_social_conversations');
+      await txn.delete('cached_social_meta');
+    });
   }
 
   Future<void> saveCurrentAccountId(String accountId) async {
@@ -516,8 +542,10 @@ class SocialCacheStore {
     required ImOutboxKind kind,
     required String conversationId,
     required String payloadJson,
+    String? accountId,
   }) async {
     final now = DateTime.now().millisecondsSinceEpoch;
+    final owner = (accountId ?? await loadCurrentAccountId() ?? '').trim();
     final existing = await txn.query(
       'im_outbox',
       where: 'client_op_id = ?',
@@ -534,6 +562,7 @@ class SocialCacheStore {
       await txn.update(
         'im_outbox',
         <String, Object?>{
+          'account_id': owner,
           'payload_json': payloadJson,
           'kind': imOutboxKindWire(kind),
           'status': imOutboxStatusWire(ImOutboxStatus.pending),
@@ -548,6 +577,7 @@ class SocialCacheStore {
     }
     await txn.insert('im_outbox', <String, Object?>{
       'client_op_id': clientOpId,
+      'account_id': owner,
       'kind': imOutboxKindWire(kind),
       'conversation_id': conversationId,
       'payload_json': payloadJson,
@@ -596,13 +626,19 @@ class SocialCacheStore {
     }
     final now = nowMs ?? DateTime.now().millisecondsSinceEpoch;
     await reclaimStaleOutbox(nowMs: now);
+    final accountId = (await loadCurrentAccountId() ?? '').trim();
+    if (accountId.isEmpty) {
+      // No signed-in account — never drain foreign/legacy rows.
+      return const <List<ImOutboxEntry>>[];
+    }
     // Active rows only (pending + inflight) so a backoff head blocks the lane.
     final rows = await db.query(
       'im_outbox',
-      where: 'status = ? OR status = ?',
+      where: '(status = ? OR status = ?) AND account_id = ?',
       whereArgs: <Object>[
         imOutboxStatusWire(ImOutboxStatus.pending),
         imOutboxStatusWire(ImOutboxStatus.inflight),
+        accountId,
       ],
       orderBy: 'created_at_ms ASC, client_op_id ASC',
     );

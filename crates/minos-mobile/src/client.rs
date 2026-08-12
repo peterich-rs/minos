@@ -147,8 +147,8 @@ impl MobileClient {
         device_id: DeviceId,
     ) -> Self {
         let (state_tx, state_rx) = watch::channel(ConnectionState::Disconnected);
-        let (ui_events_tx, _) = broadcast::channel(256);
-        let (social_events_tx, _) = broadcast::channel(256);
+        let (ui_events_tx, _) = broadcast::channel(1024);
+        let (social_events_tx, _) = broadcast::channel(1024);
         let (auth_state_tx, auth_state_rx) = watch::channel(AuthStateFrame::Unauthenticated);
         Self {
             store,
@@ -218,8 +218,8 @@ impl MobileClient {
         });
 
         let (state_tx, state_rx) = watch::channel(ConnectionState::Disconnected);
-        let (ui_events_tx, _) = broadcast::channel(256);
-        let (social_events_tx, _) = broadcast::channel(256);
+        let (ui_events_tx, _) = broadcast::channel(1024);
+        let (social_events_tx, _) = broadcast::channel(1024);
         let initial_auth_frame = match &live_auth {
             Some(s) => AuthStateFrame::Authenticated {
                 account: s.account.clone(),
