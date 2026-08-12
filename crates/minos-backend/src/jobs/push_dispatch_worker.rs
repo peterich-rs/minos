@@ -117,7 +117,18 @@ async fn process_row(
             true
         }
         Ok(crate::notifications::AccountDispatchOutcome::Transient { reason }) => {
-            if row.attempts >= push_dispatch_queue::MAX_ATTEMPTS {
+            // Presence / quiet-hours / cooldown are deferrals, not provider
+            // failures — do not burn attempt budget toward dead-letter.
+            let deferral = matches!(
+                reason.as_str(),
+                "user_online" | "quiet_hours" | "cooldown"
+            );
+            let attempts_for_budget = if deferral {
+                row.attempts.saturating_sub(1)
+            } else {
+                row.attempts
+            };
+            if !deferral && attempts_for_budget >= push_dispatch_queue::MAX_ATTEMPTS {
                 let _ = push_dispatch_queue::mark_dead(
                     &app.store,
                     &row.queue_id,
@@ -126,11 +137,17 @@ async fn process_row(
                 )
                 .await;
             } else {
-                let next = now_ms + push_dispatch_queue::backoff_delay_ms(row.attempts);
+                let delay = match reason.as_str() {
+                    "user_online" => 5_000,
+                    "cooldown" => 5_000,
+                    "quiet_hours" => 60_000,
+                    _ => push_dispatch_queue::backoff_delay_ms(attempts_for_budget.max(1)),
+                };
+                let next = now_ms + delay;
                 let _ = push_dispatch_queue::requeue_pending(
                     &app.store,
                     &row.queue_id,
-                    row.attempts,
+                    attempts_for_budget,
                     next,
                     &reason,
                 )

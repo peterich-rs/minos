@@ -413,8 +413,8 @@ impl NotificationService for DefaultNotificationService {
                 .await?;
 
                 if !allowed {
-                    crate::telemetry::record_push_decision("skip", "cooldown");
-                    return Ok(AccountDispatchOutcome::Skipped {
+                    crate::telemetry::record_push_decision("defer", "cooldown");
+                    return Ok(AccountDispatchOutcome::Transient {
                         reason: "cooldown".into(),
                     });
                 }
@@ -437,8 +437,22 @@ impl NotificationService for DefaultNotificationService {
                         _ => PushKind::Fcm,
                     };
                     if let Some(channel) = self.channel_for(kind) {
+                        let Some(provider_token) = token_row
+                            .provider_token
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|t| !t.is_empty())
+                        else {
+                            tracing::warn!(
+                                target: "minos_backend::notifications",
+                                token_hash = %token_row.token_hash,
+                                "push token row missing provider_token; skipping send"
+                            );
+                            continue;
+                        };
                         let attempt = PushAttempt {
                             token_hash: token_row.token_hash.clone(),
+                            provider_token: provider_token.to_owned(),
                             account_id: account_id.to_owned(),
                             payload: payload.clone(),
                         };
@@ -519,6 +533,17 @@ impl NotificationService for DefaultNotificationService {
                     DecisionReason::PreferenceDisabled => "preference_disabled",
                     DecisionReason::NotNotifiable => "not_notifiable",
                 };
+                // Presence grace / quiet hours are temporary — requeue instead of
+                // terminal skip so delivery still happens once the window ends.
+                if matches!(
+                    reason,
+                    DecisionReason::UserOnline | DecisionReason::QuietHours
+                ) {
+                    crate::telemetry::record_push_decision("defer", reason_label);
+                    return Ok(AccountDispatchOutcome::Transient {
+                        reason: reason_label.into(),
+                    });
+                }
                 crate::telemetry::record_push_decision("skip", reason_label);
                 Ok(AccountDispatchOutcome::Skipped {
                     reason: reason_label.into(),

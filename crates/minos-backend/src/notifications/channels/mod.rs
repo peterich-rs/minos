@@ -58,6 +58,8 @@ pub struct PushPayload {
 #[derive(Debug, Clone)]
 pub struct PushAttempt {
     pub token_hash: String,
+    /// Raw APNs/FCM device token. Empty when legacy rows lack provider_token.
+    pub provider_token: String,
     pub account_id: String,
     pub payload: PushPayload,
 }

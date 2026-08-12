@@ -1163,7 +1163,7 @@ mod tests {
         assert_eq!(row.status, OutboxStatus::Claimed);
         assert_eq!(row.ack_at_ms, None);
 
-        assert!(host_commands::ack(&pool, "cmd-1", T0 + 2).await.unwrap());
+        assert!(host_commands::ack(&pool, "cmd-1", host_id, T0 + 2).await.unwrap());
         assert!(ack(&pool, "out-host-command", T0 + 3).await.unwrap());
 
         let row = get(&pool, "out-host-command").await.unwrap().unwrap();
@@ -1374,7 +1374,7 @@ mod tests {
                 .len(),
             1
         );
-        assert!(host_commands::ack(&pool, "cmd-obs-past-deadline", T0 + 5)
+        assert!(host_commands::ack(&pool, "cmd-obs-past-deadline", host_id, T0 + 5)
             .await
             .unwrap());
         let cmd = host_commands::get(&pool, "cmd-obs-past-deadline")
@@ -1445,7 +1445,7 @@ mod tests {
                 .len(),
             1
         );
-        assert!(host_commands::ack(&pool, "cmd-expire-obs", T0 + 5)
+        assert!(host_commands::ack(&pool, "cmd-expire-obs", host_id, T0 + 5)
             .await
             .unwrap());
 
@@ -1610,6 +1610,7 @@ mod tests {
         assert!(host_commands::finish(
             &pool,
             "cmd-host-failed",
+            host_id,
             host_commands::HostCommandTerminalStatus::Failed,
             None,
             Some(&serde_json::json!({ "status": "failed", "message": "boom" })),
@@ -1740,7 +1741,7 @@ mod tests {
                 .unwrap(),
             0
         );
-        assert!(host_commands::ack(&pool, "cmd-pending", T0 + 2)
+        assert!(host_commands::ack(&pool, "cmd-pending", host_id, T0 + 2)
             .await
             .unwrap());
         assert_eq!(
@@ -1810,7 +1811,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(claimed.len(), 1);
-        assert!(host_commands::ack(&pool, "cmd-claimed", T0 + 2)
+        assert!(host_commands::ack(&pool, "cmd-claimed", host_id, T0 + 2)
             .await
             .unwrap());
 

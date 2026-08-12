@@ -1,6 +1,9 @@
 //! `push_tokens` table CRUD. Supports both SQLite and Postgres via
-//! `AsStorePool` dispatch. Tokens are hashed (SHA-256) before storage
-//! so the raw device token never persists.
+//! `AsStorePool` dispatch.
+//!
+//! Rows keep a SHA-256 `token_hash` as the stable primary key for upsert/revoke
+//! and a `provider_token` column with the raw APNs/FCM device token required
+//! for delivery. Hash-only storage made push structurally undeliverable.
 
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, SqlitePool};
@@ -18,6 +21,9 @@ pub struct PushTokenRow {
     pub created_at_ms: i64,
     pub last_used_at_ms: i64,
     pub revoked_at_ms: Option<i64>,
+    /// Raw provider device token used at send time. May be NULL for rows
+    /// registered before the provider_token migration.
+    pub provider_token: Option<String>,
 }
 
 /// Hash a raw push token for storage. Uses SHA-256 so the same token
@@ -52,6 +58,7 @@ where
                 installation_id,
                 kind,
                 locale,
+                token,
                 at_ms,
             )
             .await
@@ -64,6 +71,7 @@ where
                 installation_id,
                 kind,
                 locale,
+                token,
                 at_ms,
             )
             .await
@@ -122,14 +130,16 @@ async fn upsert_sqlite(
     installation_id: &str,
     kind: &str,
     locale: Option<&str>,
+    provider_token: &str,
     at_ms: i64,
 ) -> Result<PushTokenRow, BackendError> {
     sqlx::query_as::<_, PushTokenRow>(
-        "INSERT INTO push_tokens (token_hash, account_id, installation_id, kind, locale, created_at_ms, last_used_at_ms)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
+        "INSERT INTO push_tokens (token_hash, account_id, installation_id, kind, locale, created_at_ms, last_used_at_ms, provider_token)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7)
          ON CONFLICT(token_hash) DO UPDATE SET
              installation_id = excluded.installation_id,
              last_used_at_ms = excluded.last_used_at_ms,
+             provider_token = excluded.provider_token,
              revoked_at_ms = NULL
          RETURNING *",
     )
@@ -139,6 +149,7 @@ async fn upsert_sqlite(
     .bind(kind)
     .bind(locale)
     .bind(at_ms)
+    .bind(provider_token)
     .fetch_one(pool)
     .await
     .map_err(|e| BackendError::StoreQuery {
@@ -218,14 +229,16 @@ async fn upsert_postgres(
     installation_id: &str,
     kind: &str,
     locale: Option<&str>,
+    provider_token: &str,
     at_ms: i64,
 ) -> Result<PushTokenRow, BackendError> {
     sqlx::query_as::<_, PushTokenRow>(
-        "INSERT INTO push_tokens (token_hash, account_id, installation_id, kind, locale, created_at_ms, last_used_at_ms)
-         VALUES ($1, $2, $3, $4, $5, $6, $6)
+        "INSERT INTO push_tokens (token_hash, account_id, installation_id, kind, locale, created_at_ms, last_used_at_ms, provider_token)
+         VALUES ($1, $2, $3, $4, $5, $6, $6, $7)
          ON CONFLICT(token_hash) DO UPDATE SET
              installation_id = EXCLUDED.installation_id,
              last_used_at_ms = EXCLUDED.last_used_at_ms,
+             provider_token = EXCLUDED.provider_token,
              revoked_at_ms = NULL
          RETURNING *",
     )
@@ -235,6 +248,7 @@ async fn upsert_postgres(
     .bind(kind)
     .bind(locale)
     .bind(at_ms)
+    .bind(provider_token)
     .fetch_one(pool)
     .await
     .map_err(|e| BackendError::StoreQuery {

@@ -793,11 +793,33 @@ async fn handle_formal_frame(
         }
         ClientFrame::Ping { ts } => {
             // Activity / last_seen already noted on the inbound text frame.
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            if upgrade.role == DeviceRole::AgentHost {
+                // Mailbox leases are 2 minutes; long agent turns need renewal via
+                // host keepalive so AppendBotMessage is not rejected mid-turn.
+                if let Err(error) = crate::store::agent_dispatch_queue::renew_leases_for_host(
+                    &state.store,
+                    &upgrade.device_id.to_string(),
+                    now_ms.saturating_add(
+                        crate::store::agent_dispatch_queue::DEFAULT_LEASE_TTL_MS,
+                    ),
+                    now_ms,
+                )
+                .await
+                {
+                    tracing::warn!(
+                        target: "minos_backend::realtime::gateway",
+                        error = %error,
+                        host_id = %upgrade.device_id,
+                        "failed to renew mailbox leases on host ping"
+                    );
+                }
+            }
             let _ = send_server_frame(
                 ws,
                 &ServerFrame::Pong {
                     ts,
-                    server_time_ms: chrono::Utc::now().timestamp_millis(),
+                    server_time_ms: now_ms,
                 },
             )
             .await;
@@ -817,7 +839,7 @@ async fn handle_formal_frame(
                 .await;
                 return Ok(None);
             }
-            match host_commands::ack(&state.store, &command_id, ack_at_ms).await {
+            match host_commands::ack(&state.store, &command_id, upgrade.device_id, ack_at_ms).await {
                 Ok(_) => {
                     if let Err(error) = outbox_events::ack_pending_host_command_events(
                         &state.store,
@@ -876,6 +898,7 @@ async fn handle_formal_frame(
             let finish_result = host_commands::finish(
                 &state.store,
                 &command_id,
+                upgrade.device_id,
                 if succeeded {
                     host_commands::HostCommandTerminalStatus::Succeeded
                 } else {
@@ -1125,6 +1148,14 @@ async fn handle_delivery_accepted(
         );
         return Ok(());
     }
+    let _ = crate::store::agent_dispatch_queue::renew_lease(
+        &state.store,
+        delivery_id,
+        &host_id,
+        now_ms.saturating_add(crate::store::agent_dispatch_queue::DEFAULT_LEASE_TTL_MS),
+        now_ms,
+    )
+    .await;
     tracing::info!(
         target: "minos_backend::realtime",
         delivery_id,
@@ -1230,6 +1261,14 @@ async fn handle_append_bot_message(
         );
         return Ok(());
     }
+    let _ = crate::store::agent_dispatch_queue::renew_lease(
+        &state.store,
+        delivery_id,
+        &host_id,
+        now_ms.saturating_add(crate::store::agent_dispatch_queue::DEFAULT_LEASE_TTL_MS),
+        now_ms,
+    )
+    .await;
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return Ok(());

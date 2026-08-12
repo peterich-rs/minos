@@ -249,8 +249,10 @@ pub async fn get(
 pub async fn ack(
     store: &impl AsStorePool,
     command_id: &str,
+    host_installation_id: DeviceId,
     ack_at_ms: i64,
 ) -> Result<bool, BackendError> {
+    let host = host_installation_id.to_string();
     let result = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => sqlx::query(
             "UPDATE host_commands
@@ -260,11 +262,13 @@ pub async fn ack(
                         END,
                         ack_at_ms = ?
                   WHERE command_id = ?
+                    AND host_installation_id = ?
                     AND status IN ('pending', 'acked', 'succeeded', 'failed')
                     AND ack_at_ms IS NULL",
         )
         .bind(ack_at_ms)
         .bind(command_id)
+        .bind(&host)
         .execute(pool)
         .await
         .map(|result| result.rows_affected()),
@@ -276,11 +280,13 @@ pub async fn ack(
                         END,
                         ack_at_ms = $1
                   WHERE command_id = $2
+                    AND host_installation_id = $3
                     AND status IN ('pending', 'acked', 'succeeded', 'failed')
                     AND ack_at_ms IS NULL",
         )
         .bind(ack_at_ms)
         .bind(command_id)
+        .bind(&host)
         .execute(pool)
         .await
         .map(|result| result.rows_affected()),
@@ -293,11 +299,13 @@ pub async fn ack(
 pub async fn finish(
     store: &impl AsStorePool,
     command_id: &str,
+    host_installation_id: DeviceId,
     status: HostCommandTerminalStatus,
     response_json: Option<&Value>,
     error_json: Option<&Value>,
     finished_at_ms: i64,
 ) -> Result<bool, BackendError> {
+    let host = host_installation_id.to_string();
     let response_json = response_json
         .map(|value| serialize_json(value, "host_commands::finish.response_json"))
         .transpose()?;
@@ -310,6 +318,7 @@ pub async fn finish(
             "UPDATE host_commands
                     SET status = ?, response_json = ?, error_json = ?, finished_at_ms = ?
                   WHERE command_id = ?
+                    AND host_installation_id = ?
                     AND finished_at_ms IS NULL
                     AND status IN ('pending', 'acked')",
         )
@@ -318,6 +327,7 @@ pub async fn finish(
         .bind(error_json.as_deref())
         .bind(finished_at_ms)
         .bind(command_id)
+        .bind(&host)
         .execute(pool)
         .await
         .map(|result| result.rows_affected()),
@@ -325,6 +335,7 @@ pub async fn finish(
             "UPDATE host_commands
                     SET status = $1, response_json = $2, error_json = $3, finished_at_ms = $4
                   WHERE command_id = $5
+                    AND host_installation_id = $6
                     AND finished_at_ms IS NULL
                     AND status IN ('pending', 'acked')",
         )
@@ -333,6 +344,7 @@ pub async fn finish(
         .bind(error_json.as_deref())
         .bind(finished_at_ms)
         .bind(command_id)
+        .bind(&host)
         .execute(pool)
         .await
         .map(|result| result.rows_affected()),
@@ -546,12 +558,13 @@ mod tests {
             serde_json::json!({ "decision": "approve" })
         );
 
-        assert!(ack(&pool, "cmd-1", T0 + 100).await.unwrap());
-        assert!(!ack(&pool, "cmd-1", T0 + 200).await.unwrap());
+        assert!(ack(&pool, "cmd-1", host, T0 + 100).await.unwrap());
+        assert!(!ack(&pool, "cmd-1", host, T0 + 200).await.unwrap());
 
         assert!(finish(
             &pool,
             "cmd-1",
+            host,
             HostCommandTerminalStatus::Succeeded,
             Some(&serde_json::json!({ "ok": true })),
             None,
@@ -589,6 +602,7 @@ mod tests {
         assert!(finish(
             &pool,
             "cmd-finish-before-ack",
+            host,
             HostCommandTerminalStatus::Succeeded,
             Some(&serde_json::json!({ "ok": true })),
             None,
@@ -596,7 +610,7 @@ mod tests {
         )
         .await
         .unwrap());
-        assert!(ack(&pool, "cmd-finish-before-ack", T0 + 100).await.unwrap());
+        assert!(ack(&pool, "cmd-finish-before-ack", host, T0 + 100).await.unwrap());
 
         let row = get(&pool, "cmd-finish-before-ack").await.unwrap().unwrap();
         assert_eq!(row.status, HostCommandStatus::Succeeded);
@@ -662,4 +676,50 @@ mod tests {
             .unwrap()
             .is_empty());
     }
+
+    #[tokio::test]
+    async fn ack_and_finish_require_owning_host() {
+        let pool = memory_pool().await;
+        let owner = seed_host(&pool).await;
+        let other = seed_host(&pool).await;
+        enqueue(
+            &pool,
+            "cmd-owned",
+            owner,
+            None,
+            "minos_health",
+            &serde_json::Value::Null,
+            None,
+            T0 + 5_000,
+            T0,
+        )
+        .await
+        .unwrap();
+
+        assert!(!ack(&pool, "cmd-owned", other, T0 + 100).await.unwrap());
+        assert!(ack(&pool, "cmd-owned", owner, T0 + 100).await.unwrap());
+        assert!(!finish(
+            &pool,
+            "cmd-owned",
+            other,
+            HostCommandTerminalStatus::Succeeded,
+            Some(&serde_json::json!({ "ok": true })),
+            None,
+            T0 + 300,
+        )
+        .await
+        .unwrap());
+        assert!(finish(
+            &pool,
+            "cmd-owned",
+            owner,
+            HostCommandTerminalStatus::Succeeded,
+            Some(&serde_json::json!({ "ok": true })),
+            None,
+            T0 + 300,
+        )
+        .await
+        .unwrap());
+    }
+
 }

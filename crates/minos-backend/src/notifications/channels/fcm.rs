@@ -50,6 +50,7 @@ impl PushChannel for FcmChannel {
             target: "minos_backend::notifications::fcm",
             account_id = %attempt.account_id,
             token_hash = %attempt.token_hash,
+            has_provider_token = !attempt.provider_token.is_empty(),
             project_id = %self.project_id,
             "FCM channel NotWired: config present but production send not implemented (P5 BLOCKED on ops secrets)"
         );

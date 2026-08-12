@@ -70,6 +70,7 @@ impl PushChannel for ApnsChannel {
             target: "minos_backend::notifications::apns",
             account_id = %attempt.account_id,
             token_hash = %attempt.token_hash,
+            has_provider_token = !attempt.provider_token.is_empty(),
             topic = %self.topic,
             sandbox = self.sandbox,
             "APNs channel NotWired: config present but production send not implemented (P5 BLOCKED on ops secrets)"
