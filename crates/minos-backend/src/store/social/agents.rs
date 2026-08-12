@@ -797,6 +797,7 @@ pub async fn insert_agent_message_with_session_in_tx(
 ) -> Result<super::conversation_messages::InsertMessageOutcome, BackendError> {
     let message_id = match client_message_id.map(str::trim).filter(|s| !s.is_empty()) {
         Some(id) => {
+            let id = super::conversation_messages::validate_client_message_id(id)?;
             if let Some(existing) = super::conversation_messages::get_message_in_tx(tx, id).await? {
                 if existing.conversation_id != conversation_id {
                     return Err(BackendError::StoreQuery {
