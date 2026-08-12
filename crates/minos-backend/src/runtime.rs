@@ -119,6 +119,8 @@ pub struct AppContext {
     pub outbox_wake: Arc<tokio::sync::Notify>,
     /// In-process wake for agent_dispatch_worker (enqueue + host online).
     pub agent_dispatch_wake: Arc<tokio::sync::Notify>,
+    /// Shared supervised-job health registry (empty when workers are disabled).
+    pub job_health: crate::jobs::JobHealthRegistry,
 }
 
 impl AppContext {
@@ -236,6 +238,7 @@ impl AppContext {
             instance_id,
             outbox_wake: Arc::new(tokio::sync::Notify::new()),
             agent_dispatch_wake: Arc::new(tokio::sync::Notify::new()),
+            job_health: crate::jobs::JobHealthRegistry::new(),
         })
     }
 }
@@ -311,10 +314,11 @@ impl RuntimeShell {
             });
             let jobs =
                 crate::jobs::default_jobs(Some(Arc::clone(&app.realtime)), Some(Arc::clone(&app)));
-            Some(crate::jobs::JobSupervisor::spawn_all(
+            Some(crate::jobs::JobSupervisor::spawn_all_with_health(
                 jobs,
                 ctx,
                 cfg.runtime_mode,
+                app.job_health.clone(),
             ))
         } else {
             None

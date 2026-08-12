@@ -312,7 +312,91 @@ pub async fn list_expired_pending(
     }
     .map_err(store_err("approval_requests::list_expired_pending"))?;
 
-    rows.into_iter().map(decode_row).collect()
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        match decode_row(row) {
+            Ok(decoded) => out.push(decoded),
+            Err(error) => {
+                // NULL host / corrupt row must not fail the whole poller batch
+                // (that previously caused a tight busy-loop on the due deadline).
+                tracing::warn!(
+                    target: "minos_backend::store::approval_requests",
+                    error = %error,
+                    "skipping undecodable expired approval row"
+                );
+            }
+        }
+    }
+    Ok(out)
+}
+
+pub async fn timeout_pending_with_null_host(
+    store: &impl AsStorePool,
+    now_ms: i64,
+    limit: u32,
+) -> Result<u64, BackendError> {
+    let resolution = serde_json::json!({ "reason": "timeout", "orphan": "null_host" });
+    let resolution_json = serde_json::to_string(&resolution).map_err(|error| {
+        BackendError::StoreDecode {
+            column: "approval_requests.resolution_json".into(),
+            message: error.to_string(),
+        }
+    })?;
+    let result = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => sqlx::query(
+            "UPDATE approval_requests
+                SET state = ?,
+                    resolved_at_ms = ?,
+                    resolution_json = ?
+              WHERE request_id IN (
+                    SELECT ar.request_id
+                      FROM approval_requests ar
+                      LEFT JOIN agent_sessions s ON s.session_id = ar.agent_session_id
+                      LEFT JOIN sessions t ON t.session_id = ar.agent_session_id
+                     WHERE ar.state = ?
+                       AND ar.deadline_at_ms <= ?
+                       AND COALESCE(s.host_installation_id, t.owner_device_id) IS NULL
+                     ORDER BY ar.deadline_at_ms ASC
+                     LIMIT ?
+              )",
+        )
+        .bind(ApprovalRequestState::Timeout.as_str())
+        .bind(now_ms)
+        .bind(resolution_json.as_str())
+        .bind(ApprovalRequestState::Pending.as_str())
+        .bind(now_ms)
+        .bind(i64::from(limit))
+        .execute(pool)
+        .await
+        .map(|r| r.rows_affected()),
+        StorePoolRef::Postgres(pool) => sqlx::query(
+            "WITH victims AS (
+                SELECT ar.request_id
+                  FROM approval_requests ar
+                  JOIN agent_sessions s ON s.session_id = ar.agent_session_id
+                 WHERE ar.state = 'pending'::approval_state
+                   AND ar.deadline_at_ms <= $1
+                   AND s.host_installation_id IS NULL
+                 ORDER BY ar.deadline_at_ms ASC
+                 LIMIT $3
+             )
+             UPDATE approval_requests ar
+                SET state = 'timeout'::approval_state,
+                    resolved_at_ms = $1,
+                    resolution_json = CAST($2 AS JSONB)
+               FROM victims v
+              WHERE ar.request_id = v.request_id
+                AND ar.state = 'pending'::approval_state",
+        )
+        .bind(now_ms)
+        .bind(resolution_json.as_str())
+        .bind(i64::from(limit))
+        .execute(pool)
+        .await
+        .map(|r| r.rows_affected()),
+    }
+    .map_err(store_err("approval_requests::timeout_pending_with_null_host"))?;
+    Ok(result)
 }
 
 pub async fn next_pending_deadline_at_ms(

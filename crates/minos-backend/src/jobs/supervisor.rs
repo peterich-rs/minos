@@ -6,14 +6,17 @@ use tokio::task::JoinHandle;
 use super::health::JobHealthRegistry;
 use super::job_trait::{Job, JobContext, JobError, JobOutcome};
 
-/// Maximum consecutive failures before a job is stopped.
+/// Consecutive failures before entering extended respawn backoff (never permanent stop).
 const MAX_CONSECUTIVE_FATALS: u32 = 5;
 
 /// Base backoff duration for transient errors.
 const BASE_BACKOFF: Duration = Duration::from_secs(1);
 
-/// Maximum backoff duration.
+/// Maximum backoff duration for ordinary errors.
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
+
+/// Extended backoff after a burst of consecutive fatals — then the loop continues.
+const RESPAWN_BACKOFF: Duration = Duration::from_secs(30);
 
 /// Manages a set of background jobs, spawning a tokio task for each.
 pub struct JobSupervisor {
@@ -28,7 +31,16 @@ impl JobSupervisor {
         ctx: Arc<JobContext>,
         mode: crate::config::RuntimeMode,
     ) -> Self {
-        let health = JobHealthRegistry::new();
+        Self::spawn_all_with_health(jobs, ctx, mode, JobHealthRegistry::new())
+    }
+
+    /// Spawn jobs using a shared health registry (exposed via `/health/jobs`).
+    pub fn spawn_all_with_health(
+        jobs: Vec<Arc<dyn Job>>,
+        ctx: Arc<JobContext>,
+        mode: crate::config::RuntimeMode,
+        health: JobHealthRegistry,
+    ) -> Self {
         let mut handles = Vec::new();
 
         for job in jobs {
@@ -126,9 +138,13 @@ async fn run_job_loop(
                         target: "minos_backend::jobs",
                         job = name,
                         failures = MAX_CONSECUTIVE_FATALS,
-                        "job stopped after too many consecutive failures"
+                        backoff_secs = RESPAWN_BACKOFF.as_secs(),
+                        "job entering respawn backoff after consecutive failures"
                     );
-                    return;
+                    health.record_respawn(name);
+                    consecutive_backoff = 0;
+                    tokio::time::sleep(RESPAWN_BACKOFF).await;
+                    continue;
                 }
             }
             Ok(Ok(outcome)) => {
