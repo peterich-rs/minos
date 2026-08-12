@@ -481,6 +481,33 @@ async fn run_dispatch(mut ctx: DispatchCtx, mut shutdown_rx: oneshot::Receiver<(
     let mut logged_missing_token = false;
     let mut epoch_rx = ctx.credential_epoch.subscribe();
 
+    // Restart-safe host topic resume watermark (memory is only a hot cache).
+    {
+        let host_topic = format!("host:{}", ctx.self_device_id);
+        match ctx.store.get_host_topic_cursor(&host_topic).await {
+            Ok(seq) => {
+                if let Ok(mut guard) = ctx.host_topic_seq.lock() {
+                    *guard = seq;
+                }
+                if seq > 0 {
+                    tracing::info!(
+                        target: "minos_daemon::relay_client",
+                        topic = %host_topic,
+                        resume_after = seq,
+                        "hydrated host topic cursor from SQLite"
+                    );
+                }
+            }
+            Err(error) => {
+                tracing::warn!(
+                    target: "minos_daemon::relay_client",
+                    error = %error,
+                    "failed to hydrate host topic cursor"
+                );
+            }
+        }
+    }
+
     loop {
         let Some(secret) = secret_snapshot_or_reload(&ctx.secret, &ctx.last_error) else {
             let _ = ctx.link_tx.send(RelayLinkState::Disconnected);
@@ -969,20 +996,76 @@ async fn route_server_frame(frame: ServerFrame, ctx: &DispatchCtx) {
                         *guard = topic_seq;
                     }
                 }
+                let now_ms = chrono::Utc::now().timestamp_millis();
+                if let Err(error) = ctx
+                    .store
+                    .set_host_topic_cursor(&host_topic, topic_seq, now_ms)
+                    .await
+                {
+                    tracing::warn!(
+                        target: "minos_daemon::relay_client",
+                        error = %error,
+                        topic_seq,
+                        "failed to persist host topic cursor"
+                    );
+                }
             }
             route_durable_event(&kind, &payload, ctx).await;
         }
-        ServerFrame::SnapshotRequired { topic, .. } => {
+        ServerFrame::SnapshotRequired {
+            topic,
+            last_known_seq,
+            retention_floor_seq,
+        } => {
             let host_topic = format!("host:{}", ctx.self_device_id);
             if topic == host_topic {
+                // Real catch-up: resume from retention floor (not 0). Clearing to 0
+                // would re-trigger SnapshotRequired forever when floor > 0.
+                let resume_at = retention_floor_seq.max(0);
                 if let Ok(mut guard) = ctx.host_topic_seq.lock() {
-                    *guard = 0;
+                    *guard = resume_at;
+                }
+                let now_ms = chrono::Utc::now().timestamp_millis();
+                if let Err(error) = ctx
+                    .store
+                    .replace_host_topic_cursor(&host_topic, resume_at, now_ms)
+                    .await
+                {
+                    tracing::warn!(
+                        target: "minos_daemon::relay_client",
+                        error = %error,
+                        "failed to persist SnapshotRequired host cursor"
+                    );
                 }
                 tracing::warn!(
                     target: "minos_daemon::relay_client",
                     topic,
-                    "host topic SnapshotRequired — cursor cleared"
+                    last_known_seq,
+                    retention_floor_seq,
+                    resume_at,
+                    "host topic SnapshotRequired — resume cursor advanced to retention floor"
                 );
+                // Re-subscribe immediately with the floor cursor so catch-up continues
+                // without waiting for the next reconnect cycle.
+                let mut resume_after = HashMap::new();
+                if resume_at > 0 {
+                    resume_after.insert(host_topic.clone(), resume_at);
+                }
+                let subscribe = ClientFrame::Subscribe {
+                    topics: vec![host_topic],
+                    resume_after: if resume_after.is_empty() {
+                        None
+                    } else {
+                        Some(resume_after)
+                    },
+                    client_request_id: None,
+                };
+                if ctx.out_tx.send(subscribe).await.is_err() {
+                    tracing::warn!(
+                        target: "minos_daemon::relay_client",
+                        "failed to enqueue post-SnapshotRequired host subscribe"
+                    );
+                }
             }
         }
         ServerFrame::HostIngestAck {
@@ -1165,7 +1248,7 @@ async fn route_durable_event(kind: &str, payload: &Value, ctx: &DispatchCtx) {
             let ack = build_host_command_ack(&command_id, chrono::Utc::now().timestamp_millis());
             let _ = ctx.out_tx.send(ack).await;
 
-            match remember_host_command_start(&ctx.host_command_cache, &command_id).await {
+            match remember_host_command_start(&ctx.host_command_cache, ctx.store.as_ref(), &command_id).await {
                 HostCommandRouteAction::Start => {}
                 HostCommandRouteAction::InFlight => return,
                 HostCommandRouteAction::Replay(snapshot) => {
@@ -1183,6 +1266,7 @@ async fn route_durable_event(kind: &str, payload: &Value, ctx: &DispatchCtx) {
 
             let out_tx = ctx.out_tx.clone();
             let host_command_cache = Arc::clone(&ctx.host_command_cache);
+            let store = Arc::clone(&ctx.store);
             tokio::spawn(async move {
                 let result = invoke_host_command(&method, params, &rpc_server).await;
                 let finished_at_ms = chrono::Utc::now().timestamp_millis();
@@ -1192,6 +1276,7 @@ async fn route_durable_event(kind: &str, payload: &Value, ctx: &DispatchCtx) {
                 };
                 remember_host_command_result(
                     &host_command_cache,
+                    store.as_ref(),
                     &command_id,
                     HostCommandResultSnapshot {
                         succeeded,
@@ -1250,10 +1335,50 @@ async fn route_durable_event(kind: &str, payload: &Value, ctx: &DispatchCtx) {
 
 async fn remember_host_command_start(
     cache: &HostCommandCache,
+    store: &crate::store::LocalStore,
     command_id: &str,
 ) -> HostCommandRouteAction {
     if command_id.is_empty() {
         return HostCommandRouteAction::Start;
+    }
+
+    // Durable ledger is restart authority; memory cache is a process-local fast path.
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    match store.begin_host_command(command_id, now_ms).await {
+        Ok(crate::store::host_command_ledger::HostCommandBegin::InFlight) => {
+            let mut entries = cache.lock().await;
+            entries.insert(command_id.to_string(), HostCommandCacheEntry::InFlight);
+            return HostCommandRouteAction::InFlight;
+        }
+        Ok(crate::store::host_command_ledger::HostCommandBegin::Replay {
+            succeeded,
+            result_json,
+            error_json,
+            finished_at_ms,
+        }) => {
+            let snapshot = HostCommandResultSnapshot {
+                succeeded,
+                result: result_json.and_then(|s| serde_json::from_str(&s).ok()),
+                error: error_json.and_then(|s| serde_json::from_str(&s).ok()),
+                finished_at_ms,
+            };
+            let mut entries = cache.lock().await;
+            entries.insert(
+                command_id.to_string(),
+                HostCommandCacheEntry::Completed(snapshot.clone()),
+            );
+            prune_host_command_cache(&mut entries);
+            return HostCommandRouteAction::Replay(snapshot);
+        }
+        Ok(crate::store::host_command_ledger::HostCommandBegin::Start) => {}
+        Err(error) => {
+            tracing::warn!(
+                target: "minos_daemon::relay_client",
+                error = %error,
+                command_id,
+                "host_command_ledger begin failed; falling back to memory cache"
+            );
+        }
     }
 
     let mut entries = cache.lock().await;
@@ -1272,11 +1397,38 @@ async fn remember_host_command_start(
 
 async fn remember_host_command_result(
     cache: &HostCommandCache,
+    store: &crate::store::LocalStore,
     command_id: &str,
     snapshot: HostCommandResultSnapshot,
 ) {
     if command_id.is_empty() {
         return;
+    }
+
+    let result_json = snapshot
+        .result
+        .as_ref()
+        .and_then(|v| serde_json::to_string(v).ok());
+    let error_json = snapshot
+        .error
+        .as_ref()
+        .and_then(|v| serde_json::to_string(v).ok());
+    if let Err(error) = store
+        .complete_host_command(
+            command_id,
+            snapshot.succeeded,
+            result_json.as_deref(),
+            error_json.as_deref(),
+            snapshot.finished_at_ms,
+        )
+        .await
+    {
+        tracing::warn!(
+            target: "minos_daemon::relay_client",
+            error = %error,
+            command_id,
+            "failed to persist host_command_ledger completion"
+        );
     }
 
     let mut entries = cache.lock().await;

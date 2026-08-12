@@ -11,6 +11,7 @@
 
 pub mod artifacts;
 pub mod bot_delivery_ledger;
+pub mod host_command_ledger;
 pub mod event_writer;
 pub mod migrations_loader;
 
