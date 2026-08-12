@@ -873,29 +873,46 @@ impl ConversationCompletion {
             mentions: Vec::new(),
             reply_to_message_id: Some(origin_message_id.to_owned()),
         };
-        match tx.try_send(frame) {
-            Ok(()) => {
-                info!(
-                    target: "minos_daemon::conversation_completion",
-                    delivery_id = %mailbox.delivery_id,
-                    bot_id = %mailbox.bot_id,
-                    conversation_id,
-                    session_id,
-                    operation_id,
-                    "emitted AppendBotMessage for mailbox delivery"
-                );
+        let delivery_id = mailbox.delivery_id.clone();
+        let bot_id = mailbox.bot_id.clone();
+        let conversation_id = conversation_id.to_owned();
+        let session_id = session_id.to_owned();
+        let operation_id = operation_id.to_owned();
+        // Never silently drop after accept — bound wait, then warn loudly.
+        tokio::spawn(async move {
+            match tokio::time::timeout(std::time::Duration::from_secs(30), tx.send(frame)).await {
+                Ok(Ok(())) => {
+                    info!(
+                        target: "minos_daemon::conversation_completion",
+                        delivery_id = %delivery_id,
+                        bot_id = %bot_id,
+                        conversation_id = %conversation_id,
+                        session_id = %session_id,
+                        operation_id = %operation_id,
+                        "emitted AppendBotMessage for mailbox delivery"
+                    );
+                }
+                Ok(Err(error)) => {
+                    warn!(
+                        target: "minos_daemon::conversation_completion",
+                        delivery_id = %delivery_id,
+                        conversation_id = %conversation_id,
+                        session_id = %session_id,
+                        error = %error,
+                        "AppendBotMessage channel closed"
+                    );
+                }
+                Err(_) => {
+                    warn!(
+                        target: "minos_daemon::conversation_completion",
+                        delivery_id = %delivery_id,
+                        conversation_id = %conversation_id,
+                        session_id = %session_id,
+                        "AppendBotMessage enqueue timed out (backpressure)"
+                    );
+                }
             }
-            Err(error) => {
-                warn!(
-                    target: "minos_daemon::conversation_completion",
-                    delivery_id = %mailbox.delivery_id,
-                    conversation_id,
-                    session_id,
-                    error = %error,
-                    "failed to enqueue AppendBotMessage"
-                );
-            }
-        }
+        });
     }
 
     /// Outbox-first source delivery: durable row with stable id before provider send.

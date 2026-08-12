@@ -214,7 +214,7 @@ fn safe_filename(att: &DispatchAttachment, idx: usize) -> String {
     let stem = if blob.is_empty() {
         "blob".to_string()
     } else {
-        blob[..8.min(blob.len())].to_string()
+        blob.chars().take(8).collect::<String>()
     };
     format!("{idx}_{stem}.{ext}")
 }

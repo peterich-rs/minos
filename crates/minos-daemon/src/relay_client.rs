@@ -1118,16 +1118,28 @@ async fn route_server_frame(frame: ServerFrame, ctx: &DispatchCtx) {
             session,
             lease_expires_at_ms,
         } => {
-            Box::pin(handle_bot_inbox_delivery(
-                ctx,
-                delivery_id,
-                conversation_id,
-                message,
-                bot,
-                session,
-                lease_expires_at_ms,
-            ))
-            .await;
+            // Do not await inject on the dispatch loop — it can fill out_tx and
+            // self-deadlock while this branch holds the only out_rx consumer.
+            let store = Arc::clone(&ctx.store);
+            let out_tx = ctx.out_tx.clone();
+            let rpc_server = ctx.rpc_server.clone();
+            let self_device_id = ctx.self_device_id;
+            tokio::spawn(async move {
+                // Reconstruct a minimal ctx-like bundle via a dedicated helper.
+                handle_bot_inbox_delivery_spawned(
+                    store,
+                    out_tx,
+                    rpc_server,
+                    self_device_id,
+                    delivery_id,
+                    conversation_id,
+                    message,
+                    bot,
+                    session,
+                    lease_expires_at_ms,
+                )
+                .await;
+            });
         }
         ServerFrame::CancelDelivery { delivery_id } => {
             tracing::info!(
@@ -1571,8 +1583,11 @@ fn build_host_command_result(
 
 // ─── Bot mailbox consumer ──────────────────────────────────────────────
 
-async fn handle_bot_inbox_delivery(
-    ctx: &DispatchCtx,
+async fn handle_bot_inbox_delivery_spawned(
+    store: Arc<crate::store::LocalStore>,
+    out_tx: mpsc::Sender<ClientFrame>,
+    rpc_server: Option<Arc<RpcServerImpl>>,
+    _self_device_id: DeviceId,
     delivery_id: String,
     conversation_id: String,
     message: minos_protocol::ChatMessageSummary,
@@ -1593,8 +1608,7 @@ async fn handle_bot_inbox_delivery(
 
     let now_ms = chrono::Utc::now().timestamp_millis();
     let session_hint = session.session_id.as_deref().filter(|s| !s.is_empty());
-    let begin = match ctx
-        .store
+    let begin = match store
         .begin_bot_delivery(
             &delivery_id,
             &conversation_id,
@@ -1612,8 +1626,7 @@ async fn handle_bot_inbox_delivery(
                 error = %error,
                 "bot delivery ledger begin failed"
             );
-            let _ = ctx
-                .out_tx
+            let _ = out_tx
                 .send(ClientFrame::DeliveryRejected {
                     delivery_id,
                     code: "host_ledger_error".into(),
@@ -1634,8 +1647,7 @@ async fn handle_bot_inbox_delivery(
             return;
         }
         BotDeliveryBegin::ReplayAccepted => {
-            let _ = ctx
-                .out_tx
+            let _ = out_tx
                 .send(ClientFrame::DeliveryAccepted {
                     delivery_id: delivery_id.clone(),
                 })
@@ -1643,8 +1655,7 @@ async fn handle_bot_inbox_delivery(
             return;
         }
         BotDeliveryBegin::ReplayRejected => {
-            let _ = ctx
-                .out_tx
+            let _ = out_tx
                 .send(ClientFrame::DeliveryRejected {
                     delivery_id: delivery_id.clone(),
                     code: "already_rejected".into(),
@@ -1655,18 +1666,16 @@ async fn handle_bot_inbox_delivery(
         }
     }
 
-    let Some(rpc_server) = ctx.rpc_server.clone() else {
+    let Some(rpc_server) = rpc_server.clone() else {
         tracing::warn!(
             target: "minos_daemon::relay_client",
             delivery_id = %delivery_id,
             "no rpc_server wired — rejecting BotInboxDelivery"
         );
-        let _ = ctx
-            .store
+        let _ = store
             .mark_bot_delivery_rejected(&delivery_id, "rpc_server not wired", now_ms)
             .await;
-        let _ = ctx
-            .out_tx
+        let _ = out_tx
             .send(ClientFrame::DeliveryRejected {
                 delivery_id,
                 code: "host_not_ready".into(),
@@ -1692,8 +1701,7 @@ async fn handle_bot_inbox_delivery(
     .await;
     match inject {
         Ok(()) => {
-            if let Err(error) = ctx
-                .store
+            if let Err(error) = store
                 .mark_bot_delivery_injected(&delivery_id, session_hint, now_ms)
                 .await
             {
@@ -1709,8 +1717,7 @@ async fn handle_bot_inbox_delivery(
                 delivery_id = %delivery_id,
                 "BotInboxDelivery injected into local session"
             );
-            let _ = ctx
-                .out_tx
+            let _ = out_tx
                 .send(ClientFrame::DeliveryAccepted {
                     delivery_id: delivery_id.clone(),
                 })
@@ -1719,7 +1726,7 @@ async fn handle_bot_inbox_delivery(
         Err((code, detail)) => {
             // Retryable inject failure: clear non-terminal received so Hub requeue
             // can redeliver. Do not mark rejected (that would poison redelivery).
-            let _ = ctx.store.clear_bot_delivery_inflight(&delivery_id).await;
+            let _ = store.clear_bot_delivery_inflight(&delivery_id).await;
             tracing::warn!(
                 target: "minos_daemon::relay_client",
                 delivery_id = %delivery_id,
@@ -1727,8 +1734,7 @@ async fn handle_bot_inbox_delivery(
                 detail = %detail,
                 "BotInboxDelivery inject failed"
             );
-            let _ = ctx
-                .out_tx
+            let _ = out_tx
                 .send(ClientFrame::DeliveryRejected {
                     delivery_id,
                     code,

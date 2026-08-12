@@ -2719,6 +2719,14 @@ impl AgentManager {
                 }
             }
         }
+        {
+            let g = self.claude_sessions.lock().await;
+            for session in g.values() {
+                if let Some(pid) = session.current_turn_pid() {
+                    pgids.push(pid);
+                }
+            }
+        }
 
         // SIGTERM each process group (negative pid = group whose
         // leader is this pid; set in each driver's pre_exec setpgid).
@@ -2789,6 +2797,12 @@ impl AgentManager {
                 if let Some(mut child) = inst.child.lock().await.take() {
                     let _ = child.kill().await;
                 }
+            }
+        }
+        {
+            let mut g = self.claude_sessions.lock().await;
+            for (_, session) in std::mem::take(&mut *g) {
+                session.close(&self.events_tx).await;
             }
         }
         // Clear session maps so a later resume cannot target dead provider ids.

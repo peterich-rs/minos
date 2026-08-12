@@ -5410,8 +5410,12 @@ fn parse_conversation_mentions_from_body(body: &str) -> Vec<minos_protocol::Conv
     mentions
 }
 
+fn short_prefix(s: &str, max_chars: usize) -> String {
+    s.chars().take(max_chars).collect()
+}
+
 fn short_mcp_session_id(session_id: &str) -> String {
-    session_id[..8.min(session_id.len())].to_owned()
+    short_prefix(session_id, 8)
 }
 
 pub(crate) fn map_store_error(operation: &str, e: anyhow::Error) -> MinosError {
@@ -5860,7 +5864,7 @@ async fn ensure_hub_collaboration_conversation(
     } else {
         let project_id = format!(
             "project-hub-{}",
-            &conversation_id[..8.min(conversation_id.len())]
+            short_prefix(conversation_id, 8)
         );
         store
             .ensure_project(&project_id, "Hub", "hub", None, now_ms)
