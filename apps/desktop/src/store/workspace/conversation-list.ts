@@ -4,7 +4,7 @@
  * Hub IM mode: daemon list(project) ∥ CloudDigestCache (single account hydrate);
  * merge via conversation-list-merge. Never re-fetch Hub per project.
  */
-import type { Conversation } from "@/shared/lib/mock-data";
+import type { Conversation } from "@/shared/domain/collaboration";
 import type { WorkspaceGet, WorkspaceSet, WorkspaceState } from "./types";
 import {
   normalizeDaemonConversation,
@@ -16,10 +16,10 @@ import { daemonApi } from "@/shared/lib/daemon";
 import { singleFlightLoad } from "@/shared/lib/desktop-inflight";
 import { minosQueryClient } from "@/shared/api/queryClient";
 import { queryKeys } from "@/shared/api/queryKeys";
-import { syncConversationToCloud } from "@/shared/lib/im-cloud-sync";
+import { syncConversationToCloud } from "@/store/im/im-cloud-sync";
 import { isCloudImMode } from "@/shared/lib/cloud-timeline";
 import { cloudDigestCache } from "@/shared/lib/cloud-digest-cache";
-import { ensureCloudDigestHydrated } from "@/shared/lib/cloud-digest-ensure";
+import { ensureCloudDigestHydrated } from "@/store/im/cloud-digest-ensure";
 import { mergeConversationList } from "@/shared/lib/conversation-list-merge";
 import { reuseStableConversations } from "@/shared/lib/list-identity";
 import { useAccountStore } from "@/store/account-store";

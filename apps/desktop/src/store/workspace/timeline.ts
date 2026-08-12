@@ -18,7 +18,6 @@ import {
   EMPTY_MESSAGE_HISTORY,
   MESSAGE_PAGE_SIZE,
   firstMessageCreatedAtMs,
-  mergeMessagesOlder,
   mergeMessagesQuietTail,
   messageHistoryFromWindow,
   metaAfterMessageTail,
@@ -29,13 +28,19 @@ import { useReactionStore } from "@/features/chat/reaction-store";
 import {
   flushImOutbox,
   projectMissingLocalAgentResultsToCloud,
-} from "@/shared/lib/im-cloud-sync";
-import { pullCloudConversationMessagePage } from "@/shared/lib/im-cloud-inbound";
+} from "@/store/im/im-cloud-sync";
+import { pullCloudConversationMessagePage } from "@/store/im/im-cloud-inbound";
 import {
   isCloudImMode,
   mergeCloudAndLocalTimeline,
 } from "@/shared/lib/cloud-timeline";
 import { useAccountStore } from "@/store/account-store";
+import { getAccountScopeGeneration } from "@/shared/lib/account-scope-generation";
+import {
+  ensureTimelineWindowKey,
+  replaceWindowFromHydrate,
+  setTimelineWindow,
+} from "./timeline-write";
 
 function cloudImEnabled(): boolean {
   const { session, authPhase } = useAccountStore.getState();
@@ -66,33 +71,25 @@ export function createTimelineActions(
         // parity — see loadTranscript quiet path).
         const prev = get().timelineStatusByConversation[conversationId];
         const { next, generation } = statusForLoad(prev, quiet);
+        const accountScopeGen = getAccountScopeGeneration();
         // Quiet is stale when a hard open bumped generation past what we saw.
         // Hard open is stale when a newer hard open superseded us.
+        // Also stale after account leave/switch mid-flight.
         const isStale = () =>
           get().timelineStatusByConversation[conversationId]?.generation !==
-          generation;
+            generation ||
+          accountScopeGen !== getAccountScopeGeneration();
 
-        set((s) => {
-          // Ensure messages key exists so Hub WS hasWindow during cold pull.
-          // focused ≠ hasWindow: hydrate-only — no focusedConversationId, no
-          // mark-read (open path + debounced focused inbound own those).
-          const hasMessagesKey = Object.prototype.hasOwnProperty.call(
-            s.messagesByConversation,
-            conversationId,
-          );
-          return {
-            messagesByConversation: hasMessagesKey
-              ? s.messagesByConversation
-              : {
-                  ...s.messagesByConversation,
-                  [conversationId]: [],
-                },
-            timelineStatusByConversation: {
-              ...s.timelineStatusByConversation,
-              [conversationId]: next,
-            },
-          };
-        });
+        // Ensure messages key exists so Hub WS hasWindow during cold pull.
+        // focused ≠ hasWindow: hydrate-only — no focusedConversationId, no
+        // mark-read (open path + debounced focused inbound own those).
+        ensureTimelineWindowKey(conversationId, { accountScopeGen });
+        set((s) => ({
+          timelineStatusByConversation: {
+            ...s.timelineStatusByConversation,
+            [conversationId]: next,
+          },
+        }));
 
         try {
           const linked = cloudImEnabled();
@@ -100,7 +97,7 @@ export function createTimelineActions(
           // Subscribe only — loadTimeline is the sole cold-hydrate writer.
           // (focusConversationOnCloud must not dual-merge the window.)
           if (linked) {
-            void import("@/shared/lib/im-cloud-bridge").then(
+            void import("@/store/im/im-cloud-bridge").then(
               ({ ensureConversationSubscribedOnCloud }) => {
                 ensureConversationSubscribedOnCloud(conversationId);
               },
@@ -147,68 +144,60 @@ export function createTimelineActions(
               .hydrateFromMessages(messagePage.messages);
           }
 
-          set((s) => {
-            const prevMessages = s.messagesByConversation[conversationId];
-            let merged: typeof localUi;
-            if (linked) {
-              // Hub SSOT for chat bubbles when present. Always include localUi so
-              // host agent-result appears before / without Hub uplink.
-              // prev window keeps optimistic sending/failed + local tool cards.
-              merged = mergeCloudAndLocalTimeline({
-                cloudMessages: cloudRows,
-                localMessages: [...localUi, ...(prevMessages ?? [])],
-              });
-            } else {
-              // Local-only: union-merge by id with previous window.
-              merged = mergeMessagesQuietTail(prevMessages, localUi);
-            }
-            const trimmed = trimMessagesHardMax(merged);
-            merged = trimmed.messages;
-            const prevHist =
-              s.messageHistoryByConversation[conversationId] ??
-              EMPTY_MESSAGE_HISTORY;
-            const cloudHasOlder =
-              linked &&
-              (cloudPage.nextBeforeSeq != null ||
-                cloudPage.rawCount >= MESSAGE_PAGE_SIZE);
-            const hostHasOlder = messagePage.hasMore;
-            const firstCreated = firstMessageCreatedAtMs(merged);
-            const nextHist: MessageHistoryMeta = quiet
-              ? messageHistoryFromWindow(merged, {
-                  prev: prevHist,
-                  firstLoadedCreatedAtMs:
-                    firstCreated ?? prevHist.firstLoadedCreatedAtMs,
-                  hasOlderCloud:
-                    prevHist.hasOlderCloud || cloudHasOlder || trimmed.trimmed,
-                  hasOlderHost:
-                    prevHist.hasOlderHost || hostHasOlder || trimmed.trimmed,
-                  loadingOlder: false,
-                })
-              : metaAfterMessageTail(
-                  merged,
-                  hostHasOlder || cloudHasOlder || trimmed.trimmed,
-                  firstCreated,
-                  {
-                    hasMoreCloud: cloudHasOlder || trimmed.trimmed,
-                    hasMoreHost: hostHasOlder || trimmed.trimmed,
-                  },
-                );
-            return {
-              messagesByConversation: {
-                ...s.messagesByConversation,
-                [conversationId]: merged,
-              },
-              messageHistoryByConversation: {
-                ...s.messageHistoryByConversation,
-                [conversationId]: nextHist,
-              },
-              timelineStatusByConversation: {
-                ...s.timelineStatusByConversation,
-                [conversationId]: { phase: "ready", generation },
-              },
-              error: null,
-            };
-          });
+          const prevMessages =
+            get().messagesByConversation[conversationId];
+          let merged: typeof localUi;
+          if (linked) {
+            // Hub SSOT for chat bubbles when present. Always include localUi so
+            // host agent-result appears before / without Hub uplink.
+            // prev window keeps optimistic sending/failed + local tool cards.
+            merged = mergeCloudAndLocalTimeline({
+              cloudMessages: cloudRows,
+              localMessages: [...localUi, ...(prevMessages ?? [])],
+            });
+          } else {
+            // Local-only: union-merge by id with previous window.
+            merged = mergeMessagesQuietTail(prevMessages, localUi);
+          }
+          const trimmed = trimMessagesHardMax(merged);
+          merged = trimmed.messages;
+          const prevHist =
+            get().messageHistoryByConversation[conversationId] ??
+            EMPTY_MESSAGE_HISTORY;
+          const cloudHasOlder =
+            linked &&
+            (cloudPage.nextBeforeSeq != null ||
+              cloudPage.rawCount >= MESSAGE_PAGE_SIZE);
+          const hostHasOlder = messagePage.hasMore;
+          const firstCreated = firstMessageCreatedAtMs(merged);
+          const nextHist: MessageHistoryMeta = quiet
+            ? messageHistoryFromWindow(merged, {
+                prev: prevHist,
+                firstLoadedCreatedAtMs:
+                  firstCreated ?? prevHist.firstLoadedCreatedAtMs,
+                hasOlderCloud:
+                  prevHist.hasOlderCloud || cloudHasOlder || trimmed.trimmed,
+                hasOlderHost:
+                  prevHist.hasOlderHost || hostHasOlder || trimmed.trimmed,
+                loadingOlder: false,
+              })
+            : metaAfterMessageTail(
+                merged,
+                hostHasOlder || cloudHasOlder || trimmed.trimmed,
+                firstCreated,
+                {
+                  hasMoreCloud: cloudHasOlder || trimmed.trimmed,
+                  hasMoreHost: hostHasOlder || trimmed.trimmed,
+                },
+              );
+          setTimelineWindow(conversationId, merged, nextHist, { accountScopeGen });
+          set((s) => ({
+            timelineStatusByConversation: {
+              ...s.timelineStatusByConversation,
+              [conversationId]: { phase: "ready", generation },
+            },
+            error: null,
+          }));
 
           // loadTimeline is hydrate-only: never mark-read / never write focus.
           // Focus + Hub mark-read live on open/select (Timeline mount) and
@@ -236,20 +225,14 @@ export function createTimelineActions(
                 { limit: MESSAGE_PAGE_SIZE },
               );
               if (isStale()) return;
-              set((s) => {
-                const prev = s.messagesByConversation[conversationId] ?? [];
-                const merged = mergeCloudAndLocalTimeline({
-                  cloudMessages: page.messages,
-                  localMessages: [...localUi, ...prev],
-                });
-                const trimmed = trimMessagesHardMax(merged);
-                return {
-                  messagesByConversation: {
-                    ...s.messagesByConversation,
-                    [conversationId]: trimmed.messages,
-                  },
-                };
-              });
+              const prev =
+                get().messagesByConversation[conversationId] ?? [];
+              replaceWindowFromHydrate(conversationId, {
+                mode: "hub-local",
+                cloudMessages: page.messages,
+                localMessages: [...localUi, ...prev],
+                accountScopeGen,
+            });
             });
           }
         } catch (e) {
@@ -288,6 +271,7 @@ export function createTimelineActions(
 
   loadOlderMessages: async (conversationId) => {
     if (get().source !== "daemon" || !conversationId) return;
+    const accountScopeGen = getAccountScopeGeneration();
     const hist =
       get().messageHistoryByConversation[conversationId] ??
       EMPTY_MESSAGE_HISTORY;
@@ -356,6 +340,7 @@ export function createTimelineActions(
         cloudPagePromise,
       ]);
       if (get().source !== "daemon") return;
+      if (accountScopeGen !== getAccountScopeGeneration()) return;
       useReactionStore
         .getState()
         .hydrateFromMessages(
@@ -364,36 +349,20 @@ export function createTimelineActions(
             : page.messages,
         );
       const olderLocal = page.messages.map(toUiMessage);
-      set((s) => {
-        const existingWindow = s.messagesByConversation[conversationId] ?? [];
-        let older = olderLocal;
-        if (linked) {
-          older = mergeCloudAndLocalTimeline({
-            cloudMessages: cloudPage.messages,
-            localMessages: olderLocal,
-          });
-        }
-        const mergedRaw = mergeMessagesOlder(older, existingWindow);
-        const trimmed = trimMessagesHardMax(mergedRaw);
-        const merged = trimmed.messages;
-        const cloudHasOlder =
-          linked &&
-          (cloudPage.nextBeforeSeq != null ||
-            cloudPage.rawCount >= MESSAGE_PAGE_SIZE);
-        return {
-          messagesByConversation: {
-            ...s.messagesByConversation,
-            [conversationId]: merged,
-          },
-          messageHistoryByConversation: {
-            ...s.messageHistoryByConversation,
-            [conversationId]: messageHistoryFromWindow(merged, {
-              hasOlderCloud: cloudHasOlder || trimmed.trimmed,
-              hasOlderHost: page.hasMore || trimmed.trimmed,
-              loadingOlder: false,
-            }),
-          },
-        };
+      const cloudHasOlder =
+        linked &&
+        (cloudPage.nextBeforeSeq != null ||
+          cloudPage.rawCount >= MESSAGE_PAGE_SIZE);
+      replaceWindowFromHydrate(conversationId, {
+        mode: "older-prepend",
+        cloudMessages: linked ? cloudPage.messages : [],
+        localMessages: olderLocal,
+        history: {
+          hasOlderCloud: cloudHasOlder,
+          hasOlderHost: page.hasMore,
+          loadingOlder: false,
+        },
+        accountScopeGen,
       });
     } catch {
       set((s) => {

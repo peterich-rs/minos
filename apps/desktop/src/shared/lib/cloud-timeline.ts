@@ -10,7 +10,7 @@
  * fuzzy `*:sessionId` keys.
  */
 
-import type { AgentRuntime, TimelineMessage } from "./mock-data.ts";
+import type { AgentRuntime, TimelineMessage } from "../domain/collaboration.ts";
 import type { CloudChatMessage } from "./minos-cloud.ts";
 import { formatLocalClock } from "./time.ts";
 import { normalizeHostRuntime } from "./im-cloud-sync-helpers.ts";

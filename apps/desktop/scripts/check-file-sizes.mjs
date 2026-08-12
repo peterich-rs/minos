@@ -28,13 +28,14 @@ const ALLOWLIST = {
   // Cloud REST helpers (auth + conversations + agents). sendConversationMessage removed;
   // further split to minos-cloud helpers planned (freeze above current LOC).
   "shared/lib/minos-cloud.ts": 1100,
-  // Mock fixtures + Conversation types; extract mock-conversations.ts planned.
+  // Mock fixtures + presentation maps; domain types live in shared/domain.
   "shared/lib/mock-data.ts": 850,
-  // Outbox posts + per-lane worker share one module; split to im-outbox-worker.ts next.
-  "shared/lib/im-cloud-sync.ts": 950,
-  // Cloud IM bridge (lifecycle + mark-read + timeline merge). Split mark-read /
-  // lifecycle helpers next; cap raised after Hub→Cloud rename (im-hub-bridge @784→~826).
-  "shared/lib/im-cloud-bridge.ts": 850,
+  // Durable outbox machine + account ownership; split persist backend next.
+  "shared/lib/im-outbox.ts": 850,
+  // Outbox posts + per-lane worker (store ownership). Split worker lanes next.
+  "store/im/im-cloud-sync.ts": 1050,
+  // Cloud IM bridge (lifecycle + mark-read + timeline merge) under store/im.
+  "store/im/im-cloud-bridge.ts": 850,
 };
 
 /**

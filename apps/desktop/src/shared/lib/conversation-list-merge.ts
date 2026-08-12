@@ -18,8 +18,8 @@
  * - Display strings are **not** stored; UI formats `updatedAtMs` at render.
  */
 
-import type { Conversation } from "./mock-data.ts";
-import { runtimesOfBots } from "./mock-data.ts";
+import type { Conversation } from "../domain/collaboration.ts";
+import { runtimesOfBots } from "../domain/collaboration.ts";
 import type { CloudConversationDigest } from "./cloud-digest-cache.ts";
 import { positiveMs } from "./rail-activity.ts";
 

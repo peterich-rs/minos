@@ -134,6 +134,14 @@ pub trait LocalDaemonRpc {
         req: crate::HostApplyLinkTokenParams,
     ) -> jsonrpsee::core::RpcResult<crate::HostApplyLinkTokenResponse>;
 
+    /// Drop local host installation token and disconnect `/ws/host`.
+    /// Used when Desktop leaves an account scope so the next account cannot
+    /// inherit the previous host credential.
+    #[method(name = "host_clear_credential")]
+    async fn host_clear_credential(
+        &self,
+    ) -> jsonrpsee::core::RpcResult<crate::HostClearCredentialResponse>;
+
     #[method(name = "list_clis")]
     async fn list_clis(&self) -> jsonrpsee::core::RpcResult<crate::ListClisResponse>;
 

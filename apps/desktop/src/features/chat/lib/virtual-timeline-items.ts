@@ -1,4 +1,4 @@
-import type { TimelineMessage } from "@/shared/lib/mock-data";
+import type { TimelineMessage } from "@/shared/domain/collaboration";
 import {
   isMessageGroupContinuation,
   shouldShowDayDivider,

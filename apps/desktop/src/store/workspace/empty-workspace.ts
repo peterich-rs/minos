@@ -1,7 +1,7 @@
 /**
  * Empty workspace caches, idle fetch status, bootstrap flight, refresh timers.
  */
-import type { Conversation, Project, TimelineMessage } from "@/shared/lib/mock-data";
+import type { Conversation, Project, TimelineMessage } from "@/shared/domain/collaboration";
 import type { TranscriptItem } from "@/shared/lib/daemon";
 import type { MessageHistoryMeta } from "@/shared/lib/message-history";
 import type { TranscriptHistoryMeta } from "@/shared/lib/transcript-history";

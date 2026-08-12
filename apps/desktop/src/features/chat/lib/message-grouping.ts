@@ -1,4 +1,4 @@
-import type { TimelineMessage } from "@/shared/lib/mock-data";
+import type { TimelineMessage } from "@/shared/domain/collaboration";
 
 /** Default continuity window (Slack-like). */
 export const MESSAGE_GROUP_WINDOW_MS = 10 * 60 * 1000;

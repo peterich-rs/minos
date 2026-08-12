@@ -1,4 +1,5 @@
-import { agentMeta, type TimelineMessage } from "@/shared/lib/mock-data";
+import type { TimelineMessage } from "@/shared/domain/collaboration";
+import { agentMeta } from "@/shared/lib/mock-data";
 import { shortSessionId, type KnownAgent } from "@/shared/lib/agent-route";
 
 /** Truncate a worktree path for header meta chips. */

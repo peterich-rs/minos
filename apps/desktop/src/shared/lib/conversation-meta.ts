@@ -4,7 +4,7 @@ import type {
   ConversationBoardColumn,
   ConversationPriority,
   ConversationProgress,
-} from "@/shared/lib/mock-data";
+} from "../domain/collaboration.ts";
 
 export const PRIORITY_CYCLE: Array<ConversationPriority | null> = [
   null,

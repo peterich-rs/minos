@@ -8,7 +8,7 @@ import {
 } from "react";
 import { ArrowDown, Loader2 } from "lucide-react";
 import { VList, type VListHandle } from "virtua";
-import type { TimelineMessage } from "@/shared/lib/mock-data";
+import type { TimelineMessage } from "@/shared/domain/collaboration";
 import {
   useStableArrayShallow,
   useStableMap,

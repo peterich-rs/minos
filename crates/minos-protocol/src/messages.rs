@@ -745,6 +745,12 @@ pub struct HostApplyLinkTokenResponse {
     pub linked: bool,
 }
 
+/// Daemon local RPC: drop local `hit_` and disconnect `/ws/host` dialer.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HostClearCredentialResponse {
+    pub cleared: bool,
+}
+
 /// Account-side request to target one paired host for a CLI scan.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ListHostClisRequest {

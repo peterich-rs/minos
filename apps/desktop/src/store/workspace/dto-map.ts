@@ -7,8 +7,8 @@ import type {
   TimelineMessage,
   AgentRuntime,
   SessionStatus,
-} from "@/shared/lib/mock-data";
-import { runtimesOfBots } from "@/shared/lib/mock-data";
+} from "@/shared/domain/collaboration";
+import { runtimesOfBots } from "@/shared/domain/collaboration";
 import {
   type DaemonConversation,
   type DaemonMessage,

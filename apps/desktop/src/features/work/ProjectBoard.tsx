@@ -1,10 +1,10 @@
 import { useMemo } from "react";
 import { MessageSquare } from "lucide-react";
-import {
-  boardColumns,
-  type Conversation,
-  type ConversationBoardColumn,
-} from "@/shared/lib/mock-data";
+import { boardColumns } from "@/shared/lib/mock-data";
+import type {
+  Conversation,
+  ConversationBoardColumn,
+} from "@/shared/domain/collaboration";
 import { PriorityTag, ProgressTag } from "@/shared/ui/Tag";
 import { useUiStore } from "@/store/ui-store";
 import { useWorkspaceStore } from "@/store/workspace-store";

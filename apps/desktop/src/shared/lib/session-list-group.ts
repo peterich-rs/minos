@@ -1,5 +1,7 @@
-import type { SessionStatus } from "@/shared/lib/mock-data";
-import type { ProjectSession } from "@/store/workspace-store";
+import type {
+  ProjectSession,
+  SessionStatus,
+} from "../domain/collaboration.ts";
 
 export type ConversationSessionGroup = {
   conversationId: string;

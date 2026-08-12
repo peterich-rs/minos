@@ -34,7 +34,7 @@ import {
   trimTranscriptHardMax,
   hasTranscriptWorkingSet,
 } from "@/shared/lib/transcript-history";
-import type { SessionStatus } from "@/shared/lib/mock-data";
+import type { SessionStatus } from "@/shared/domain/collaboration";
 
 
 export function createTranscriptActions(

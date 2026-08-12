@@ -60,15 +60,38 @@ function errorMessage(error: unknown): string {
   return String(error);
 }
 
+export type RegisterHostCredentialOptions = {
+  /**
+   * Re-checked after every await and again immediately before applyLinkToken.
+   * Account leave/switch must return false so a deferred prior register never
+   * writes hit_ under a newer account.
+   */
+  isCurrent?: () => boolean;
+};
+
+function abortedOutcome(): EnsureHostFailure {
+  return {
+    ok: false,
+    stage: "apply",
+    message: "Host registration superseded by account leave/switch",
+  };
+}
+
 /**
  * Register this Mac with the account and apply a fresh `hit_`.
  * Call only when local credential is absent or known-invalid — not every poll.
+ *
+ * Generation checks: every await boundary + immediately before applyLinkToken.
  */
 export async function registerHostCredential(
   ports: EnsureHostPorts,
   hostDisplayName: string,
+  opts?: RegisterHostCredentialOptions,
 ): Promise<EnsureHostOutcome> {
   const displayName = hostDisplayName.trim() || "This Mac";
+  const stillCurrent = () => opts?.isCurrent?.() ?? true;
+
+  if (!stillCurrent()) return abortedOutcome();
 
   let prepared: {
     installationId: string;
@@ -85,6 +108,7 @@ export async function registerHostCredential(
       cause: error,
     };
   }
+  if (!stillCurrent()) return abortedOutcome();
 
   let signature: string;
   try {
@@ -101,6 +125,7 @@ export async function registerHostCredential(
       cause: error,
     };
   }
+  if (!stillCurrent()) return abortedOutcome();
 
   let cloud: Awaited<ReturnType<EnsureHostPorts["registerHost"]>>;
   try {
@@ -119,9 +144,17 @@ export async function registerHostCredential(
       cause: error,
     };
   }
+  if (!stillCurrent()) return abortedOutcome();
 
   try {
+    // Final guard immediately before the only write that mutates daemon hit_.
+    if (!stillCurrent()) return abortedOutcome();
     const applied = await ports.applyLinkToken(cloud.hostInstallationToken);
+    if (!stillCurrent()) {
+      // Applied under a race — caller must clear; surface as aborted so setState
+      // does not claim ownership for the superseded account.
+      return abortedOutcome();
+    }
     if (!applied.linked) {
       return {
         ok: false,

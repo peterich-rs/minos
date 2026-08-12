@@ -28,6 +28,11 @@ type UiState = {
   setPrimaryNav: (nav: PrimaryNav) => void;
   selectProject: (projectId: string) => void;
   selectConversation: (conversationId: string | null) => void;
+  /**
+   * Restore/default conversation when a project list arrives. Unlike
+   * selectConversation, does not force projectView to "conversations".
+   */
+  ensureConversationSelection: (conversationId: string | null) => void;
   setProjectView: (view: ProjectView) => void;
   selectSession: (sessionId: string | null) => void;
   /** Jump to Sessions tab and open transcript for session. */
@@ -48,6 +53,11 @@ type UiState = {
    * so navigation restore still works after reconnect.
    */
   clearWorkspaceEphemeralUi: () => void;
+  /**
+   * Clear every account-scoped navigation pointer. Used on logout / account switch
+   * so B never restores A's project/conversation selection.
+   */
+  clearAccountScopedUi: () => void;
 };
 
 export const useUiStore = create<UiState>()(
@@ -94,11 +104,28 @@ export const useUiStore = create<UiState>()(
         });
       },
       selectConversation: (conversationId) => {
+        // Explicit user navigation to a conversation always opens Conversations.
         set((s) => ({
           conversationId,
           selectedSessionId: null,
           projectView: "conversations",
           primaryNav: "work",
+          lastConversationByProject:
+            conversationId && s.projectId
+              ? {
+                  ...s.lastConversationByProject,
+                  [s.projectId]: conversationId,
+                }
+              : s.lastConversationByProject,
+        }));
+      },
+      /**
+       * Restore/default conversation when project list loads — must not force
+       * projectView to "conversations" (user may be on Sessions/Board).
+       */
+      ensureConversationSelection: (conversationId) => {
+        set((s) => ({
+          conversationId,
           lastConversationByProject:
             conversationId && s.projectId
               ? {
@@ -166,6 +193,16 @@ export const useUiStore = create<UiState>()(
       clearWorkspaceEphemeralUi: () =>
         set({
           selectedSessionId: null,
+          draftByConversationId: {},
+          replyToMessageIdByConversation: {},
+          commandPaletteOpen: false,
+        }),
+      clearAccountScopedUi: () =>
+        set({
+          projectId: "",
+          conversationId: null,
+          selectedSessionId: null,
+          lastConversationByProject: {},
           draftByConversationId: {},
           replyToMessageIdByConversation: {},
           commandPaletteOpen: false,

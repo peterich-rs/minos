@@ -4,7 +4,8 @@ import {
   AuxiliaryPanel,
   type AuxiliaryPanelLayout,
 } from "@/shared/layout/AuxiliaryPanel";
-import { agentMeta, type AgentSession } from "@/shared/lib/mock-data";
+import type { AgentSession } from "@/shared/domain/collaboration";
+import { agentMeta } from "@/shared/lib/mock-data";
 import { projectSessionFromEntity } from "@/shared/lib/session-entity";
 import { Avatar } from "@/shared/ui/Avatar";
 import { StatusPill } from "@/shared/ui/StatusPill";
@@ -66,8 +67,9 @@ export function SessionInspector({
     void loadInspector(conversationId);
   }, [conversationId, detailsOpen, source, loadInspector, bootEpoch]);
 
-  // While any session is live (or mid-recovery), quiet-relist even if livePush
-  // is healthy — recovery windows must not catch-22 on Paused-only status.
+  // Degraded poll only when live push is off. livePush===true is the SSOT for
+  // session status — never setInterval refresh project sessions (architecture).
+  const livePush = useWorkspaceStore((s) => s.livePush);
   const hasLiveSession = sessions.some(
     (s) =>
       s.status === "running" ||
@@ -76,12 +78,20 @@ export function SessionInspector({
   );
   useEffect(() => {
     if (source !== "daemon" || !conversationId || !detailsOpen) return;
+    if (livePush) return;
     if (!hasLiveSession) return;
     const id = window.setInterval(() => {
       void loadInspector(conversationId, { quiet: true });
     }, 2000);
     return () => window.clearInterval(id);
-  }, [conversationId, detailsOpen, source, hasLiveSession, loadInspector]);
+  }, [
+    conversationId,
+    detailsOpen,
+    source,
+    livePush,
+    hasLiveSession,
+    loadInspector,
+  ]);
 
   const conversation = conversations.find((c) => c.id === conversationId);
   const project = projects.find((p) => p.id === projectId);

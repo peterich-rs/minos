@@ -3,7 +3,7 @@ import { cn } from "@/shared/lib/utils";
 import type {
   ConversationPriority,
   ConversationProgress,
-} from "@/shared/lib/mock-data";
+} from "../domain/collaboration.ts";
 
 const priorityStyles: Record<
   ConversationPriority,

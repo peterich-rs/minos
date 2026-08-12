@@ -1,10 +1,9 @@
 /**
  * Lifecycle bridge: Account session → Hub realtime → Desktop timeline store.
  *
- * Hub chat messages update `messagesByConversation` directly.
- * Sync Engine: conversation subscribe, resume cursors, SnapshotRequired range rebuild.
- * Cold hydrate is owned by loadTimeline (subscribe-only here on open).
- * No daemon_append of cloud IM into Host SQLite.
+ * Timeline body writes go through the sole funnel (`timeline-write`), not
+ * raw `messagesByConversation` setState. Cold hydrate is owned by
+ * loadTimeline (subscribe-only here on open). No daemon_append of cloud IM.
  */
 
 import { conversationTopic } from "@/shared/lib/cloud-cursors";
@@ -12,38 +11,39 @@ import {
   CloudRealtimeSession,
   type CloudRealtimeSyncState,
 } from "@/shared/lib/cloud-realtime";
-import { mapCloudChatMessageToTimeline } from "@/shared/lib/im-cloud-inbound";
+import { mapCloudChatMessageToTimeline } from "@/store/im/im-cloud-inbound";
+import { isCloudImMode } from "@/shared/lib/cloud-timeline";
 import {
-  isCloudImMode,
-  mergeCloudAndLocalTimeline,
-  removeMessageFromTimeline,
-  upsertCloudMessageIntoTimeline,
-} from "@/shared/lib/cloud-timeline";
-import { startImOutboxWorker } from "@/shared/lib/im-cloud-sync";
+  startImOutboxWorker,
+  stopImOutboxWorker,
+} from "@/store/im/im-cloud-sync";
 import {
   pullCloudConversationMessagePage,
   pullCloudForwardGap,
-} from "@/shared/lib/im-cloud-inbound";
+} from "@/store/im/im-cloud-inbound";
 import {
-  EMPTY_MESSAGE_HISTORY,
   MESSAGE_PAGE_SIZE,
   firstMessageSeq,
   lastMessageSeq,
-  mergeMessagesQuietTail,
-  messageHistoryFromWindow,
-  trimMessagesHardMax,
 } from "@/shared/lib/message-history";
 import { cloudDigestCache } from "@/shared/lib/cloud-digest-cache";
-import { ensureCloudDigestHydrated } from "@/shared/lib/cloud-digest-ensure";
+import { ensureCloudDigestHydrated } from "@/store/im/cloud-digest-ensure";
 import {
   positiveMs,
   railActivityFromTimeline,
   resolveDigestLastActivityMs,
 } from "@/shared/lib/rail-activity";
+import { getCloudAuth } from "@/shared/lib/cloud-auth";
 import { useAccountStore } from "@/store/account-store";
+import { getAccountScopeGeneration } from "@/shared/lib/account-scope-generation";
 import { useWorkspaceStore } from "@/store/workspace-store";
+import {
+  applyHubMessage,
+  removeRecalledMessage,
+  replaceWindowFromHydrate,
+} from "@/store/workspace/timeline-write";
 import type { CloudChatMessage } from "@/shared/lib/minos-cloud";
-import type { TimelineMessage } from "@/shared/lib/mock-data";
+import type { TimelineMessage } from "@/shared/domain/collaboration";
 
 let session: CloudRealtimeSession | null = null;
 let startedForToken: string | null = null;
@@ -182,8 +182,10 @@ async function onCloudChatMessage(message: CloudChatMessage): Promise<void> {
     await onCloudChatMessageRecalled(message);
     return;
   }
+  const accountScopeGen = getAccountScopeGeneration();
   const ui = await mapCloudChatMessageToTimeline(message);
   if (!ui) return;
+  if (accountScopeGen !== getAccountScopeGeneration()) return;
 
   const ws = useWorkspaceStore.getState();
   const conversationId = message.conversationId;
@@ -199,35 +201,16 @@ async function onCloudChatMessage(message: CloudChatMessage): Promise<void> {
   // Open/focused window: apply body. Background: next open loadTimeline always
   // cold-pulls Hub (no separate dirty flag).
   if (focused || hasWindow) {
-    useWorkspaceStore.setState((s) => {
-      const prev = s.messagesByConversation[conversationId] ?? [];
-      const merged = upsertCloudMessageIntoTimeline(prev, ui);
-      const trimmed = trimMessagesHardMax(merged);
-      const prevHist =
-        s.messageHistoryByConversation[conversationId] ?? EMPTY_MESSAGE_HISTORY;
-      return {
-        messagesByConversation: {
-          ...s.messagesByConversation,
-          [conversationId]: trimmed.messages,
-        },
-        messageHistoryByConversation: {
-          ...s.messageHistoryByConversation,
-          [conversationId]: messageHistoryFromWindow(trimmed.messages, {
-            prev: prevHist,
-            hasOlderCloud: prevHist.hasOlderCloud || trimmed.trimmed,
-            hasOlderHost: prevHist.hasOlderHost,
-            loadingOlder: false,
-          }),
-        },
-      };
-    });
+    applyHubMessage(conversationId, ui, { accountScopeGen });
   }
 
   // Live patch Hub digest + rail row (no per-project Hub re-query).
-  patchRailFromCloudMessage(message, { isRecall: false });
+  if (accountScopeGen === getAccountScopeGeneration()) {
+    patchRailFromCloudMessage(message, { isRecall: false });
+  }
 
   // Focused live inbound: debounce Hub mark-read (not only on open).
-  if (focused) {
+  if (focused && accountScopeGen === getAccountScopeGeneration()) {
     scheduleFocusedMarkRead(conversationId);
   }
 }
@@ -300,8 +283,7 @@ function patchRailFromDigest(input: {
     preview = input.preview?.trim() || prevDigest?.preview || null;
   }
 
-  const myAccountId =
-    useAccountStore.getState().session?.accountId?.trim() ?? "";
+  const myAccountId = getCloudAuth()?.accountId?.trim() ?? "";
   const isOwn =
     Boolean(myAccountId) && input.senderAccountId === myAccountId;
   let unread = prevDigest?.unreadCount ?? 0;
@@ -397,27 +379,12 @@ async function onCloudChatMessageRecalled(message: CloudChatMessage): Promise<vo
   const conversationId = message.conversationId;
   const messageId = message.messageId;
   if (!conversationId || !messageId) return;
+  const accountScopeGen = getAccountScopeGeneration();
 
-  useWorkspaceStore.setState((s) => {
-    if (
-      !Object.prototype.hasOwnProperty.call(
-        s.messagesByConversation,
-        conversationId,
-      )
-    ) {
-      return s;
-    }
-    const prev = s.messagesByConversation[conversationId];
-    const next = removeMessageFromTimeline(prev, messageId);
-    if (next === prev) return s;
-    return {
-      messagesByConversation: {
-        ...s.messagesByConversation,
-        [conversationId]: next,
-      },
-    };
-  });
-  patchRailFromCloudMessage(message, { isRecall: true });
+  removeRecalledMessage(conversationId, messageId, { accountScopeGen });
+  if (accountScopeGen === getAccountScopeGeneration()) {
+    patchRailFromCloudMessage(message, { isRecall: true });
+  }
 }
 
 function conversationIdFromTopic(topic: string): string | null {
@@ -463,6 +430,7 @@ async function onSnapshotRequired(topic: string): Promise<void> {
 async function reconcileConversationFromCloud(
   conversationId: string,
 ): Promise<void> {
+  const accountScopeGen = getAccountScopeGeneration();
   const prev =
     useWorkspaceStore.getState().messagesByConversation[conversationId] ?? [];
   const maxSeq = lastMessageSeq(prev);
@@ -542,51 +510,36 @@ async function reconcileConversationFromCloud(
     /* reaction store optional in tests */
   }
 
-  useWorkspaceStore.setState((s) => {
-    const localPrev = s.messagesByConversation[conversationId] ?? [];
-    const prevHist =
-      s.messageHistoryByConversation[conversationId] ?? EMPTY_MESSAGE_HISTORY;
-    // Quiet-tail union keeps previously loaded older pages across snapshot.
-    const withTail =
-      localPrev.length > 0
-        ? mergeMessagesQuietTail(localPrev, cloudRows)
-        : cloudRows;
-    const merged = mergeCloudAndLocalTimeline({
-      cloudMessages: cloudRows,
-      localMessages: withTail,
-    });
-    const trimmed = trimMessagesHardMax(merged);
-    const cloudHasOlder =
-      latestPage.nextBeforeSeq != null ||
-      latestPage.rawCount >= MESSAGE_PAGE_SIZE ||
-      trimmed.trimmed;
-    return {
-      messagesByConversation: {
-        ...s.messagesByConversation,
-        [conversationId]: trimmed.messages,
-      },
-      messageHistoryByConversation: {
-        ...s.messageHistoryByConversation,
-        [conversationId]: messageHistoryFromWindow(trimmed.messages, {
-          prev: prevHist,
-          hasOlderCloud: prevHist.hasOlderCloud || cloudHasOlder,
-          hasOlderHost: prevHist.hasOlderHost || trimmed.trimmed,
-          loadingOlder: false,
-        }),
-      },
-    };
+  // Quiet-tail union keeps previously loaded older pages across snapshot.
+  if (accountScopeGen !== getAccountScopeGeneration()) return;
+  const cloudHasOlder =
+    latestPage.nextBeforeSeq != null ||
+    latestPage.rawCount >= MESSAGE_PAGE_SIZE;
+  replaceWindowFromHydrate(conversationId, {
+    mode: "quiet-tail",
+    cloudMessages: cloudRows,
+    history: {
+      hasOlderCloud: cloudHasOlder,
+      loadingOlder: false,
+    },
+    accountScopeGen,
   });
 }
 
 /** Start or refresh hub WS when Minos account session is available. */
 export function ensureImCloudBridge(): void {
-  const { deviceId, session: account, authPhase } = useAccountStore.getState();
-  if (authPhase !== "authenticated" || !account?.accessToken?.trim()) {
+  const auth = getCloudAuth();
+  if (
+    !auth ||
+    auth.authPhase !== "authenticated" ||
+    !auth.accessToken.trim()
+  ) {
     stopImCloudBridge();
     return;
   }
-  const token = account.accessToken;
-  const accountId = account.accountId ?? "";
+  const deviceId = auth.deviceId;
+  const token = auth.accessToken;
+  const accountId = auth.accountId;
   if (session && startedForToken === token) {
     session.updateAuth(deviceId, token, accountId);
     // Keep focused conversation subscribed.
@@ -610,8 +563,7 @@ export function ensureImCloudBridge(): void {
     onMessageReactions: ({ messageId, reactions }) => {
       void import("@/features/chat/reaction-store").then(({ useReactionStore }) => {
         // Durable wire is viewer-neutral; recompute reactedByMe from local account.
-        const myAccountId =
-          useAccountStore.getState().session?.accountId?.trim() ?? "";
+        const myAccountId = getCloudAuth()?.accountId?.trim() ?? "";
         useReactionStore.getState().applyServerReactions(
           messageId,
           reactions.map((g) => {
@@ -658,12 +610,20 @@ export function ensureImCloudBridge(): void {
 }
 
 export function stopImCloudBridge(): void {
+  stopImOutboxWorker();
   session?.stop();
   session = null;
   startedForToken = null;
   lastSyncState = "disconnected";
   useAccountStore.getState().syncAccountFromCloud("disconnected");
   cancelPendingFocusedMarkRead();
+  // Account leave / stop must not keep unread id set across sessions.
+  unreadCountedMessageIds.clear();
+}
+
+/** Clear process-local unread dedupe (account leave). */
+export function clearImCloudBridgeUnreadDedupe(): void {
+  unreadCountedMessageIds.clear();
 }
 
 export function getCloudRealtimeState(): CloudRealtimeSyncState {
@@ -680,6 +640,8 @@ export async function appendMessageOnCloud(input: {
   conversationId: string;
   text: string;
   replyToMessageId?: string | null;
+  /** When set, refuse to send if the live bridge session is a different account. */
+  expectedAccountId?: string;
   mentions?: Array<
     | {
         kind: "bot";
@@ -706,6 +668,13 @@ export async function appendMessageOnCloud(input: {
   ensureImCloudBridge();
   if (!session) {
     return { ok: false, reason: "socket" };
+  }
+  const expected = input.expectedAccountId?.trim();
+  if (expected) {
+    const liveAccount = useAccountStore.getState().session?.accountId?.trim() ?? "";
+    if (!liveAccount || liveAccount !== expected) {
+      return { ok: false, reason: "socket" };
+    }
   }
   const result = await session.sendAppendMessage({
     clientOperationId: input.clientOperationId,
@@ -772,11 +741,11 @@ export function tryAppendMessageOnCloud(input: {
 export function ensureConversationSubscribedOnCloud(conversationId: string): void {
   if (!conversationId.trim()) return;
   ensureImCloudBridge();
-  const { session: account, authPhase } = useAccountStore.getState();
+  const auth = getCloudAuth();
   if (
     !isCloudImMode({
-      authPhase,
-      accessToken: account?.accessToken,
+      authPhase: auth?.authPhase,
+      accessToken: auth?.accessToken,
     })
   ) {
     return;
@@ -800,20 +769,21 @@ export async function recallMessageOnCloud(
   conversationId: string,
   messageId: string,
 ): Promise<void> {
-  const { deviceId, session, authPhase } = useAccountStore.getState();
+  const auth = getCloudAuth();
   if (
+    !auth ||
     !isCloudImMode({
-      authPhase,
-      accessToken: session?.accessToken,
+      authPhase: auth.authPhase,
+      accessToken: auth.accessToken,
     }) ||
-    !session?.accessToken
+    !auth.accessToken
   ) {
     throw new Error("Hub recall requires authenticated account");
   }
   const { recallCloudMessage } = await import("@/shared/lib/minos-cloud");
   const recalled = await recallCloudMessage(
-    deviceId,
-    session.accessToken,
+    auth.deviceId,
+    auth.accessToken,
     conversationId,
     messageId,
   );

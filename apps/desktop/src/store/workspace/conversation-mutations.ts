@@ -19,9 +19,9 @@ import {
   parseProgress,
   progressForBoardColumn,
 } from "@/shared/lib/conversation-meta";
-import type { Conversation, Project } from "@/shared/lib/mock-data";
-import { runtimesOfBots } from "@/shared/lib/mock-data";
-import { syncConversationToCloud } from "@/shared/lib/im-cloud-sync";
+import type { Conversation, Project } from "@/shared/domain/collaboration";
+import { runtimesOfBots } from "@/shared/domain/collaboration";
+import { syncConversationToCloud } from "@/store/im/im-cloud-sync";
 
 export function createConversationMutationActions(
   set: WorkspaceSet,
@@ -207,17 +207,29 @@ export function createConversationMutationActions(
               priority: next ?? undefined,
             },
           ),
+          actionError: null,
         }));
         return;
       }
-      const updated = await daemonApi.updateConversation(conversationId, {
-        priority: priorityValue,
-      });
-      set((s) => ({
-        conversations: patchLocalConversation(s.conversations, conversationId, {
-          priority: parsePriority(updated.priority),
-        }),
-      }));
+      try {
+        const updated = await daemonApi.updateConversation(conversationId, {
+          priority: priorityValue,
+        });
+        set((s) => ({
+          conversations: patchLocalConversation(
+            s.conversations,
+            conversationId,
+            {
+              priority: parsePriority(updated.priority),
+            },
+          ),
+          actionError: null,
+        }));
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : String(error);
+        set({ actionError: `Failed to update priority: ${message}` });
+      }
     },
 
     cycleConversationProgress: async (conversationId) => {
@@ -233,17 +245,29 @@ export function createConversationMutationActions(
               progress: next,
             },
           ),
+          actionError: null,
         }));
         return;
       }
-      const updated = await daemonApi.updateConversation(conversationId, {
-        progress: next,
-      });
-      set((s) => ({
-        conversations: patchLocalConversation(s.conversations, conversationId, {
-          progress: parseProgress(updated.progress),
-        }),
-      }));
+      try {
+        const updated = await daemonApi.updateConversation(conversationId, {
+          progress: next,
+        });
+        set((s) => ({
+          conversations: patchLocalConversation(
+            s.conversations,
+            conversationId,
+            {
+              progress: parseProgress(updated.progress),
+            },
+          ),
+          actionError: null,
+        }));
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : String(error);
+        set({ actionError: `Failed to update progress: ${message}` });
+      }
     },
 
     setConversationProgress: async (conversationId, progress) => {

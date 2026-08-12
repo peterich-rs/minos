@@ -103,6 +103,9 @@ struct Inner {
     /// Wakes the dispatch loop when pairing redeem writes a new host
     /// installation token.
     secret_notify: Arc<Notify>,
+    /// Bumped on apply/clear so a live `/ws/host` session closes immediately
+    /// when the credential is revoked or replaced (not only on daemon stop).
+    credential_epoch: watch::Sender<u64>,
     /// HTTP client for the backend's `/v1/*` control plane.
     http: Arc<RelayHttpClient>,
     /// Peer-state publisher kept so `request_pairing_token` can enter the
@@ -115,6 +118,8 @@ struct Inner {
     out_tx: mpsc::Sender<ClientFrame>,
     live_tx: mpsc::Sender<ClientFrame>,
     backfill_tx: mpsc::Sender<ClientFrame>,
+    /// Link-state publisher so account leave can force `/ws/host` offline.
+    link_tx: watch::Sender<RelayLinkState>,
 }
 
 pub struct RelayClient {
@@ -163,6 +168,7 @@ impl RelayClient {
 
         let secret_store = Arc::new(StdMutex::new(secret));
         let secret_notify = Arc::new(Notify::new());
+        let (credential_epoch_tx, _credential_epoch_rx) = watch::channel(0_u64);
         let http = match RelayHttpClient::new(&backend_url, self_device_id, mac_name.clone()) {
             Ok(c) => Arc::new(c),
             Err(e) => {
@@ -189,8 +195,9 @@ impl RelayClient {
             self_device_id,
             secret: secret_store.clone(),
             secret_notify: secret_notify.clone(),
+            credential_epoch: credential_epoch_tx.clone(),
             backend_url: backend_url.clone(),
-            link_tx,
+            link_tx: link_tx.clone(),
             peer_tx: peer_tx.clone(),
             out_tx: out_tx.clone(),
             out_rx,
@@ -215,6 +222,7 @@ impl RelayClient {
             mac_name,
             secret: secret_store,
             secret_notify,
+            credential_epoch: credential_epoch_tx,
             http,
             peer_tx,
             peer_store,
@@ -223,6 +231,7 @@ impl RelayClient {
             out_tx,
             live_tx,
             backfill_tx,
+            link_tx,
         });
 
         (Arc::new(Self { inner }), link_rx, peer_rx)
@@ -257,6 +266,9 @@ impl RelayClient {
     }
 
     /// Persist a host installation token and wake the realtime dial loop.
+    ///
+    /// Bumps the credential epoch so any already-open `/ws/host` session for a
+    /// prior token closes before the dialer reconnects with the new secret.
     pub fn apply_link_token(
         &self,
         host_installation_token: &str,
@@ -271,12 +283,36 @@ impl RelayClient {
         if let Ok(mut guard) = self.inner.secret.lock() {
             *guard = Some(token);
         }
+        bump_credential_epoch(&self.inner.credential_epoch);
         self.inner.secret_notify.notify_waiters();
         tracing::info!(
             target: "minos_daemon::relay_client",
             "host installation token applied for Host Link; waking /ws/host dialer"
         );
         Ok(minos_protocol::HostApplyLinkTokenResponse { linked: true })
+    }
+
+    /// Drop the local host installation token and force `/ws/host` offline.
+    ///
+    /// Desktop calls this on account leave so a subsequent login cannot inherit
+    /// the previous account's host credential or online bit. Bumps the credential
+    /// epoch so a live dispatch loop closes the socket immediately (not only on
+    /// daemon shutdown).
+    pub fn clear_link_token(
+        &self,
+    ) -> Result<minos_protocol::HostClearCredentialResponse, MinosError> {
+        if let Ok(mut guard) = self.inner.secret.lock() {
+            *guard = None;
+        }
+        crate::device_secret_store::delete()?;
+        bump_credential_epoch(&self.inner.credential_epoch);
+        let _ = self.inner.link_tx.send(RelayLinkState::Disconnected);
+        self.inner.secret_notify.notify_waiters();
+        tracing::info!(
+            target: "minos_daemon::relay_client",
+            "host installation token cleared; /ws/host dialer disabled until re-link"
+        );
+        Ok(minos_protocol::HostClearCredentialResponse { cleared: true })
     }
 
     /// Back-compat helper for callers that still think in terms of a
@@ -372,6 +408,7 @@ struct DispatchCtx {
     self_device_id: DeviceId,
     secret: Arc<StdMutex<Option<DeviceSecret>>>,
     secret_notify: Arc<Notify>,
+    credential_epoch: watch::Sender<u64>,
     backend_url: String,
     link_tx: watch::Sender<RelayLinkState>,
     peer_tx: watch::Sender<PeerState>,
@@ -390,6 +427,16 @@ struct DispatchCtx {
     ingest_sync: Arc<StdMutex<Option<IngestSyncHandle>>>,
     /// Last applied durable `topic_seq` on `host:{self}` for Subscribe resume.
     host_topic_seq: Arc<StdMutex<i64>>,
+}
+
+fn bump_credential_epoch(tx: &watch::Sender<u64>) {
+    let next = tx.borrow().wrapping_add(1);
+    let _ = tx.send(next);
+}
+
+/// True when the live session's credential epoch no longer matches (clear/apply).
+fn credential_epoch_changed(rx: &watch::Receiver<u64>, session_epoch: u64) -> bool {
+    *rx.borrow() != session_epoch
 }
 
 fn clear_peer_snapshot(
@@ -424,12 +471,15 @@ fn clear_host_installation_token(ctx: &DispatchCtx) {
 enum CycleOutcome {
     Reconnect,
     TokenRejected,
+    /// Local clear/apply invalidated the session; re-read secret without backoff.
+    CredentialRevoked,
     Shutdown,
 }
 
 async fn run_dispatch(mut ctx: DispatchCtx, mut shutdown_rx: oneshot::Receiver<()>) {
     let mut attempt: u32 = 0;
     let mut logged_missing_token = false;
+    let mut epoch_rx = ctx.credential_epoch.subscribe();
 
     loop {
         let Some(secret) = secret_snapshot_or_reload(&ctx.secret, &ctx.last_error) else {
@@ -449,15 +499,22 @@ async fn run_dispatch(mut ctx: DispatchCtx, mut shutdown_rx: oneshot::Receiver<(
                     return;
                 }
                 () = ctx.secret_notify.notified() => {}
+                // clear/apply may wake us before secret_notify if races reorder.
+                changed = epoch_rx.changed() => {
+                    if changed.is_err() {
+                        return;
+                    }
+                }
                 () = tokio::time::sleep(TOKEN_WAIT_POLL_INTERVAL) => {}
             }
             attempt = 0;
             continue;
         };
         logged_missing_token = false;
+        let session_epoch = *epoch_rx.borrow();
         let _ = ctx.link_tx.send(RelayLinkState::Connecting { attempt });
 
-        let outcome = Box::pin(run_once(&mut ctx, &mut shutdown_rx, &secret)).await;
+        let outcome = Box::pin(run_once(&mut ctx, &mut shutdown_rx, &secret, session_epoch)).await;
 
         match outcome {
             CycleOutcome::Shutdown => {
@@ -466,6 +523,12 @@ async fn run_dispatch(mut ctx: DispatchCtx, mut shutdown_rx: oneshot::Receiver<(
             }
             CycleOutcome::TokenRejected => {
                 clear_host_installation_token(&ctx);
+                let _ = ctx.link_tx.send(RelayLinkState::Disconnected);
+                attempt = 0;
+            }
+            CycleOutcome::CredentialRevoked => {
+                // Secret already cleared or replaced; force offline then re-enter
+                // the top of the loop so we only dial with a current credential.
                 let _ = ctx.link_tx.send(RelayLinkState::Disconnected);
                 attempt = 0;
             }
@@ -486,6 +549,13 @@ async fn run_dispatch(mut ctx: DispatchCtx, mut shutdown_rx: oneshot::Receiver<(
                         let _ = ctx.link_tx.send(RelayLinkState::Disconnected);
                         return;
                     }
+                    changed = epoch_rx.changed() => {
+                        if changed.is_err() {
+                            return;
+                        }
+                        // Credential change aborts backoff; re-read secret immediately.
+                        attempt = 0;
+                    }
                     () = tokio::time::sleep(delay) => {}
                 }
             }
@@ -497,7 +567,9 @@ async fn run_once(
     ctx: &mut DispatchCtx,
     shutdown_rx: &mut oneshot::Receiver<()>,
     secret: &DeviceSecret,
+    session_epoch: u64,
 ) -> CycleOutcome {
+    let mut epoch_rx = ctx.credential_epoch.subscribe();
     // Dial /ws/host with Authorization: Bearer hit_* (no ticket dance).
     let ws_url = build_host_ws_url(&ctx.backend_url);
     let request = match build_host_ws_request(&ws_url, secret) {
@@ -513,9 +585,22 @@ async fn run_once(
         }
     };
 
+    if credential_epoch_changed(&epoch_rx, session_epoch) {
+        return CycleOutcome::CredentialRevoked;
+    }
+
     let ws = tokio::select! {
         biased;
         _ = &mut *shutdown_rx => return CycleOutcome::Shutdown,
+        changed = epoch_rx.changed() => {
+            if changed.is_err() {
+                return CycleOutcome::Shutdown;
+            }
+            if credential_epoch_changed(&epoch_rx, session_epoch) {
+                return CycleOutcome::CredentialRevoked;
+            }
+            return CycleOutcome::Reconnect;
+        }
         res = tokio_tungstenite::connect_async(request) => match res {
             Ok((stream, _resp)) => stream,
             Err(WsError::Http(resp)) if resp.status().as_u16() == 401 => {
@@ -565,10 +650,17 @@ async fn run_once(
         }
     };
 
+    if credential_epoch_changed(&epoch_rx, session_epoch) {
+        // Token was cleared/replaced during handshake; drop the new socket.
+        let (mut sink, _stream) = ws.split();
+        let _ = sink.send(Message::Close(None)).await;
+        return CycleOutcome::CredentialRevoked;
+    }
+
     tracing::info!(target: "minos_daemon::relay_client", "relay websocket upgraded via host bearer");
     refresh_peers_from_backend(ctx, Some(secret)).await;
 
-    Box::pin(dispatch_loop(ws, ctx, shutdown_rx)).await
+    Box::pin(dispatch_loop(ws, ctx, shutdown_rx, session_epoch)).await
 }
 
 /// Cold snapshot of linked account clients (online / last_active).
@@ -636,8 +728,10 @@ async fn dispatch_loop(
     >,
     ctx: &mut DispatchCtx,
     shutdown_rx: &mut oneshot::Receiver<()>,
+    session_epoch: u64,
 ) -> CycleOutcome {
     let (mut sink, mut stream) = ws.split();
+    let mut epoch_rx = ctx.credential_epoch.subscribe();
     let mut heartbeat = tokio::time::interval(RELAY_PING_INTERVAL);
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut last_pong_at = Instant::now();
@@ -649,11 +743,33 @@ async fn dispatch_loop(
     // - StreamEvent kind=presence → refresh_peers_from_backend
     // No periodic poll (avoids dual SSOT with live presence pushes).
     loop {
+        if credential_epoch_changed(&epoch_rx, session_epoch) {
+            tracing::info!(
+                target: "minos_daemon::relay_client",
+                "host credential revoked/replaced; closing /ws/host"
+            );
+            let _ = sink.send(Message::Close(None)).await;
+            return CycleOutcome::CredentialRevoked;
+        }
         tokio::select! {
             biased;
             _ = &mut *shutdown_rx => {
                 let _ = sink.send(Message::Close(None)).await;
                 return CycleOutcome::Shutdown;
+            }
+            changed = epoch_rx.changed() => {
+                if changed.is_err() {
+                    let _ = sink.send(Message::Close(None)).await;
+                    return CycleOutcome::Shutdown;
+                }
+                if credential_epoch_changed(&epoch_rx, session_epoch) {
+                    tracing::info!(
+                        target: "minos_daemon::relay_client",
+                        "host credential revoked/replaced; closing /ws/host"
+                    );
+                    let _ = sink.send(Message::Close(None)).await;
+                    return CycleOutcome::CredentialRevoked;
+                }
             }
             out = ctx.out_rx.recv() => {
                 let Some(frame) = out else {

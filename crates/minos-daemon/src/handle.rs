@@ -368,19 +368,37 @@ impl DaemonHandle {
     /// calling twice is a benign no-op after the first success.
     ///
     /// Shutdown sequence:
-    /// 1. Best-effort `AgentGlue::shutdown` — suspend (not close) every live
-    ///    thread and **synchronously** persist `suspended` + `needs_continue`.
-    /// 2. SIGTERM every provider child with a 5s grace, then SIGKILL.
+    /// 1. Best-effort `AgentGlue::shutdown` (bounded) — suspend live threads.
+    /// 2. **Always** SIGTERM/SIGKILL every provider child (even if step 1 hangs
+    ///    or the outer caller times out mid-await — step 2 runs after the
+    ///    agent await completes or times out locally, never gated on success).
     /// 3. Tear down local RPC discovery + the relay WS client.
     ///
     /// Orphan recovery for unclean kills runs on the **next** start via
     /// `mark_orphans_suspended` (not here).
     #[allow(clippy::missing_errors_doc)]
     pub async fn stop(&self) -> Result<(), MinosError> {
-        match self.inner.agent.shutdown().await {
-            Ok(()) | Err(MinosError::AgentNotRunning) => {}
-            Err(err) => return Err(err),
+        // Bound agent suspend so a stuck cancel cannot prevent provider kill.
+        const AGENT_SHUTDOWN_BUDGET: std::time::Duration = std::time::Duration::from_secs(4);
+        match tokio::time::timeout(AGENT_SHUTDOWN_BUDGET, self.inner.agent.shutdown()).await {
+            Ok(Ok(())) | Ok(Err(MinosError::AgentNotRunning)) => {}
+            Ok(Err(err)) => {
+                tracing::warn!(
+                    target: "minos_daemon::handle",
+                    error = %err,
+                    "agent shutdown returned error; continuing provider terminate"
+                );
+            }
+            Err(_) => {
+                tracing::warn!(
+                    target: "minos_daemon::handle",
+                    timeout_secs = AGENT_SHUTDOWN_BUDGET.as_secs(),
+                    "agent shutdown timed out; continuing provider terminate"
+                );
+            }
         }
+        // Provider process-group terminate is the hard authorization boundary
+        // for leftover CLI children — always run after the agent attempt.
         self.inner
             .agent
             .manager

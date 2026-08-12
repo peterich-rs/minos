@@ -1,5 +1,6 @@
 import { cn } from "@/shared/lib/utils";
-import { initials, toneClasses, type AvatarTone } from "@/shared/lib/mock-data";
+import type { AvatarTone } from "../domain/collaboration.ts";
+import { initials, toneClasses } from "@/shared/lib/mock-data";
 
 type AvatarProps = {
   name: string;

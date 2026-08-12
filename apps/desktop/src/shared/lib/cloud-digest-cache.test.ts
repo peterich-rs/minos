@@ -43,6 +43,28 @@ describe("cloudDigestCache", () => {
     assert.equal(row?.title, "One");
   });
 
+  it("isHydratedFor requires matching owner account", () => {
+    cloudDigestCache.hydrate(
+      [
+        {
+          conversationId: "c1",
+          title: "One",
+          preview: null,
+          lastMessageAtMs: 1,
+          unreadCount: 0,
+          unreadMentionCount: 0,
+          kind: "group",
+          memberCount: 1,
+        },
+      ],
+      "acct-a",
+    );
+    assert.equal(cloudDigestCache.isHydratedFor("acct-a"), true);
+    assert.equal(cloudDigestCache.isHydratedFor("acct-b"), false);
+    cloudDigestCache.invalidate();
+    assert.equal(cloudDigestCache.isHydratedFor("acct-a"), false);
+  });
+
   it("invalidate clears hydrate flag", () => {
     cloudDigestCache.hydrate([
       {

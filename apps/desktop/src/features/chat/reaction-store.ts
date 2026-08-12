@@ -9,7 +9,7 @@ import { create } from "zustand";
 import { daemonApi, isTauriRuntime } from "@/shared/lib/daemon";
 import { toast } from "@/shared/lib/toast";
 import { isCloudImMode } from "@/shared/lib/cloud-timeline";
-import { syncReactionToggleToCloud } from "@/shared/lib/im-cloud-sync";
+import { syncReactionToggleToCloud } from "@/store/im/im-cloud-sync";
 import { useAccountStore } from "@/store/account-store";
 import {
   hasInFlightToggleCount,

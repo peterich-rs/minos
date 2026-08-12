@@ -86,7 +86,7 @@ async function runConversationTurnEndRefresh(
     const { useAccountStore } = await import("@/store/account-store");
     const { isCloudImMode } = await import("@/shared/lib/cloud-timeline");
     const { projectMissingLocalAgentResultsToCloud, flushImOutbox } =
-      await import("@/shared/lib/im-cloud-sync");
+      await import("@/store/im/im-cloud-sync");
     const { toUiMessage } = await import("./helpers");
     const { daemonApi } = await import("@/shared/lib/daemon");
     const { session, authPhase } = useAccountStore.getState();
@@ -316,6 +316,7 @@ export function createLiveIngressActions(
         let projectSessionsByProject = s.projectSessionsByProject;
         let attentionSessions = s.attentionSessions;
         let conversations = s.conversations;
+        let projects = s.projects;
         const attentionStatus = s.attentionStatus;
         for (const id of ids) {
           const entity = patchSessionEntity(sessionsById[id], id, {
@@ -328,6 +329,7 @@ export function createLiveIngressActions(
               projectSessionsByProject,
               attentionSessions,
               conversations,
+              projects,
               attentionStatus,
             },
             entity,
@@ -338,6 +340,7 @@ export function createLiveIngressActions(
           projectSessionsByProject = committed.projectSessionsByProject;
           attentionSessions = committed.attentionSessions;
           conversations = committed.conversations;
+          if (committed.projects) projects = committed.projects;
         }
         return {
           sessionsById,
@@ -345,6 +348,7 @@ export function createLiveIngressActions(
           projectSessionsByProject,
           attentionSessions,
           conversations,
+          projects,
         };
       });
       return;

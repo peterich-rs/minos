@@ -9,21 +9,26 @@ import { minosQueryClient } from "@/shared/api/queryClient";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { transcriptHasPendingApproval } from "@/shared/lib/session-status";
 import type { MentionProfile } from "@/shared/lib/agent-route";
-import type { DeliveryStatus, TimelineMessage } from "@/shared/lib/mock-data";
+import type { TimelineMessage } from "@/shared/domain/collaboration";
 import type { TranscriptItem } from "@/shared/lib/daemon";
 import { quietRefreshConversationSlices } from "./shared";
 import {
   buildStructuredMentions,
   resolveDispatchTargets,
 } from "./send-dispatch";
-import { syncUserMessageToCloud } from "@/shared/lib/im-cloud-sync";
+import { syncUserMessageToCloud } from "@/store/im/im-cloud-sync";
 import { isCloudImMode } from "@/shared/lib/cloud-timeline";
 import { formatLocalClock } from "@/shared/lib/time";
 import { cloudDigestCache } from "@/shared/lib/cloud-digest-cache";
 import { positiveMs } from "@/shared/lib/rail-activity";
 import { useAccountStore } from "@/store/account-store";
-import type { Conversation } from "@/shared/lib/mock-data";
-import { membershipTokensOfBots } from "@/shared/lib/mock-data";
+import type { Conversation } from "@/shared/domain/collaboration";
+import { membershipTokensOfBots } from "@/shared/domain/collaboration";
+import { getAccountScopeGeneration } from "@/shared/lib/account-scope-generation";
+import {
+  applyOptimisticUserMessage,
+  patchMessageDelivery,
+} from "./timeline-write";
 
 /**
  * Flattened membership tokens for resolveDispatchTargets.
@@ -76,6 +81,140 @@ function cloudAuthenticated(): boolean {
     authPhase,
     accessToken: session?.accessToken,
   });
+}
+
+function agentRuntimesFromConv(conv: Conversation): string[] {
+  const fromBots = conv.participatingBots
+    ?.map((b) => b.runtime.trim().toLowerCase())
+    .filter(Boolean);
+  if (fromBots && fromBots.length > 0) return fromBots;
+  return conv.participatingAgents;
+}
+
+function railPreviewFromBody(messageBody: string): string {
+  const text = messageBody.trim();
+  return text.length > 88 ? `${text.slice(0, 88)}…` : text;
+}
+
+/**
+ * Shared Hub delivery pipeline for send + retry (validate → uplink → local project).
+ * Caller owns optimistic row insert / deliveryStatus transitions.
+ */
+async function deliverMessage(
+  get: WorkspaceGet,
+  set: WorkspaceSet,
+  input: {
+    conversationId: string;
+    messageId: string;
+    messageBody: string;
+    replyToMessageId?: string;
+    createdAtMs: number;
+    clock: string;
+    accountScopeGen: number;
+  },
+): Promise<void> {
+  const {
+    conversationId,
+    messageId,
+    messageBody,
+    replyToMessageId,
+    createdAtMs,
+    clock,
+    accountScopeGen,
+  } = input;
+  const conv = get().conversations.find((c) => c.id === conversationId);
+  const project = get().projects.find((p) => p.id === conv?.projectId);
+  if (!conv || !project) {
+    throw new Error("conversation or project not found");
+  }
+
+  const mentionProfiles = await loadMentionProfiles(
+    conversationId,
+    conv.participatingAgents,
+    conv.participatingBots,
+  );
+  if (accountScopeGen !== getAccountScopeGeneration()) {
+    throw new Error("account scope changed");
+  }
+  const installedAgents = new Set(
+    get()
+      .clis.filter((c) => c.installed)
+      .map((c) => c.agent.toLowerCase()),
+  );
+  resolveDispatchTargets({
+    messageBody,
+    participatingAgents: membershipTokensFromConv(conv),
+    installedAgents,
+    mentionProfiles,
+  });
+  const structuredMentions = buildStructuredMentions(
+    messageBody,
+    mentionProfiles,
+  );
+  if (!cloudAuthenticated()) {
+    throw new Error(
+      "Sign in to send collaboration messages. Bot delivery requires Account Hub sync.",
+    );
+  }
+
+  const cloudAck = await syncUserMessageToCloud({
+    conversationId,
+    messageId,
+    text: messageBody,
+    title: conv.title,
+    replyToMessageId,
+    createdAtMs,
+    agentRuntimes: agentRuntimesFromConv(conv),
+    messageSource: "client_live",
+    mentions: structuredMentions.length > 0 ? structuredMentions : undefined,
+  });
+  // Only acked settlement reaches here (sync throws on timeout/terminal).
+  if (accountScopeGen !== getAccountScopeGeneration()) {
+    throw new Error("account scope changed");
+  }
+  patchMessageDelivery(
+    conversationId,
+    messageId,
+    {
+      deliveryStatus: "sent",
+      ...(cloudAck?.messageSeq != null
+        ? { messageSeq: cloudAck.messageSeq }
+        : {}),
+      time: clock,
+      createdAtMs,
+    },
+    { accountScopeGen },
+  );
+  patchRailActivity(
+    set,
+    conversationId,
+    railPreviewFromBody(messageBody),
+    createdAtMs,
+  );
+  try {
+    await daemonApi.appendUserMessage(conversationId, messageBody, messageId);
+  } catch (localErr) {
+    console.warn(
+      "[workspace] local workbench projection after Hub Ack failed",
+      localErr,
+    );
+  }
+  if (accountScopeGen !== getAccountScopeGeneration()) return;
+  set({ actionError: null });
+  void get().loadTimeline(conversationId, { quiet: true });
+
+  await quietRefreshConversationSlices(get, conversationId);
+  if (accountScopeGen !== getAccountScopeGeneration()) return;
+  await minosQueryClient.invalidateQueries({
+    queryKey: queryKeys.conversations(conv.projectId),
+  });
+  await minosQueryClient.invalidateQueries({
+    queryKey: queryKeys.projectSessions(conv.projectId),
+  });
+  await minosQueryClient.invalidateQueries({
+    queryKey: queryKeys.inspectorSessions(conversationId),
+  });
+  await get().loadConversations(conv.projectId);
 }
 
 /**
@@ -212,7 +351,7 @@ export function createUseCasesActions(
         ? `approval-${crypto.randomUUID()}`
         : `approval-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     const { syncApprovalResolve } = await import(
-      "@/shared/lib/im-cloud-sync"
+      "@/store/im/im-cloud-sync"
     );
 
     // Optimistic demote before RPC so the card leaves the actionable state
@@ -436,6 +575,7 @@ export function createUseCasesActions(
     // Constraint #1: generate messageId + optimistic `sending` insert BEFORE
     // any business validation that may throw, so the user always sees their
     // bubble immediately (WeChat: empty composer + sending row).
+    const accountScopeGen = getAccountScopeGeneration();
     const resolvedId = messageId ?? `msg_${crypto.randomUUID()}`;
     const replyToMessageId = options?.replyToMessageId;
     const createdAtMs = Date.now();
@@ -451,156 +591,59 @@ export function createUseCasesActions(
       // yet accept reply_to — durable round-trip deferred to protocol wave.
       ...(replyToMessageId ? { replyToMessageId } : {}),
     };
-    // Optimistic timeline + rail (do not wait for Hub digest / list re-merge).
-    set((s) => ({
-      messagesByConversation: {
-        ...s.messagesByConversation,
-        [conversationId]: [
-          ...(s.messagesByConversation[conversationId] ?? []),
-          optimistic,
-        ],
-      },
-      error: null,
-    }));
-    const railPreview =
-      messageBody.trim().length > 88
-        ? `${messageBody.trim().slice(0, 88)}…`
-        : messageBody.trim();
-    patchRailActivity(set, conversationId, railPreview, createdAtMs);
+    applyOptimisticUserMessage(conversationId, optimistic, {
+      accountScopeGen,
+    });
+    patchRailActivity(
+      set,
+      conversationId,
+      railPreviewFromBody(messageBody),
+      createdAtMs,
+    );
 
-    const patchDelivery = (
-      status: DeliveryStatus,
-      seq?: number,
-      time?: string,
-    ) => {
-      set((s) => ({
-        messagesByConversation: {
-          ...s.messagesByConversation,
-          [conversationId]: (s.messagesByConversation[conversationId] ?? []).map(
-            (m) =>
-              m.id === resolvedId
-                ? {
-                    ...m,
-                    deliveryStatus: status,
-                    messageSeq: seq ?? m.messageSeq,
-                    time: time ?? m.time,
-                    createdAtMs: m.createdAtMs ?? createdAtMs,
-                  }
-                : m,
-          ),
-        },
-      }));
-    };
-
-    // Mock backend has no RPC: flip to sent synchronously.
     if (get().source !== "daemon") {
-      patchDelivery("sent", undefined, clock);
+      patchMessageDelivery(
+        conversationId,
+        resolvedId,
+        {
+          deliveryStatus: "sent",
+          time: clock,
+        },
+        { accountScopeGen },
+      );
       return;
     }
 
     try {
-      const conv = get().conversations.find((c) => c.id === conversationId);
-      const project = get().projects.find((p) => p.id === conv?.projectId);
-      if (!conv || !project) {
-        throw new Error("conversation or project not found");
-      }
-
-      // Validate routing BEFORE durable append (same order as retry).
-      // mentionProfiles are roster-scoped (Hub participants preferred).
-      const mentionProfiles = await loadMentionProfiles(
-        conversationId,
-        conv.participatingAgents,
-        conv.participatingBots,
-      );
-      const installedAgents = new Set(
-        get()
-          .clis.filter((c) => c.installed)
-          .map((c) => c.agent.toLowerCase()),
-      );
-      const membershipTokens = membershipTokensFromConv(conv);
-      // Validate @ targets (membership / sole-route). Bot activation itself is
-      // Hub-only when Account is live — no local startAgent fan-out.
-      resolveDispatchTargets({
-        messageBody,
-        participatingAgents: membershipTokens,
-        installedAgents,
-        mentionProfiles,
-      });
-      // Structured mentions for AppendMessage (Hub validates membership only).
-      const structuredMentions = buildStructuredMentions(
-        messageBody,
-        mentionProfiles,
-      );
-
-      const convTitle = conv.title;
-      // Host runtime bins for cloud upsert — derived from bot roster SSOT.
-      const agentRuntimes = (() => {
-        const fromBots = conv.participatingBots
-          ?.map((b) => b.runtime.trim().toLowerCase())
-          .filter(Boolean);
-        if (fromBots && fromBots.length > 0) return fromBots;
-        return conv.participatingAgents;
-      })();
-      const accountOn = cloudAuthenticated();
-      if (!accountOn) {
-        throw new Error(
-          "Sign in to send collaboration messages. Bot delivery requires Account Hub sync.",
-        );
-      }
-
-      // Collaboration write authority is Hub only. "sent" comes from ChatSendAck
-      // (or durable echo); local daemon workbench is a projection after Ack.
-      const cloudAck = await syncUserMessageToCloud({
+      await deliverMessage(get, set, {
         conversationId,
         messageId: resolvedId,
-        text: messageBody,
-        title: convTitle,
+        messageBody,
         replyToMessageId,
         createdAtMs,
-        agentRuntimes,
-        messageSource: "client_live",
-        mentions:
-          structuredMentions.length > 0 ? structuredMentions : undefined,
+        clock,
+        accountScopeGen,
       });
-      const messageSeq = cloudAck?.messageSeq;
-      patchDelivery("sent", messageSeq, clock);
-      patchRailActivity(set, conversationId, railPreview, createdAtMs);
-      // Optional local workbench projection (idempotent by message_id) — not write authority.
-      try {
-        await daemonApi.appendUserMessage(
-          conversationId,
-          messageBody,
-          resolvedId,
-        );
-      } catch (localErr) {
-        console.warn(
-          "[workspace] local workbench projection after Hub Ack failed",
-          localErr,
-        );
-      }
-      set({ actionError: null });
-      void get().loadTimeline(conversationId, { quiet: true });
-
-      await quietRefreshConversationSlices(get, conversationId);
-      await minosQueryClient.invalidateQueries({
-        queryKey: queryKeys.conversations(conv.projectId),
-      });
-      await minosQueryClient.invalidateQueries({
-        queryKey: queryKeys.projectSessions(conv.projectId),
-      });
-      await minosQueryClient.invalidateQueries({
-        queryKey: queryKeys.inspectorSessions(conversationId),
-      });
-      await get().loadConversations(conv.projectId);
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
+      if (accountScopeGen !== getAccountScopeGeneration()) {
+        throw e;
+      }
       set({ actionError: message });
-      // Only mark user bubble failed when append itself failed (still "sending").
-      const stillSending = (get().messagesByConversation[conversationId] ?? [])
-        .find((m) => m.id === resolvedId)
-        ?.deliveryStatus === "sending";
+      const stillSending =
+        (get().messagesByConversation[conversationId] ?? []).find(
+          (m) => m.id === resolvedId,
+        )?.deliveryStatus === "sending";
+      // Timeout, terminal, or any other failure: surface failed so the user
+      // can retry (WeChat-style). Never leave a permanent spinner; never
+      // false-sent. Background outbox may still ack later and upgrade to sent.
       if (stillSending) {
-        patchDelivery("failed");
+        patchMessageDelivery(
+          conversationId,
+          resolvedId,
+          { deliveryStatus: "failed" },
+          { accountScopeGen },
+        );
       }
       await quietRefreshConversationSlices(get, conversationId);
       throw e;
@@ -610,6 +653,7 @@ export function createUseCasesActions(
   retryFailedMessage: async (conversationId, messageId) => {
     // Constraint #2: never insert a new optimistic row on retry. Reuse
     // message_id (store append is idempotent) and patch delivery in place.
+    const accountScopeGen = getAccountScopeGeneration();
     const list = get().messagesByConversation[conversationId] ?? [];
     const failed = list.find((m) => m.id === messageId);
     if (!failed) throw new Error("message not found");
@@ -618,141 +662,54 @@ export function createUseCasesActions(
     }
     const messageBody = failed.body;
     const replyToMessageId = failed.replyToMessageId;
+    const retryAt = failed.createdAtMs ?? Date.now();
+    const retryClock =
+      formatLocalClock(retryAt) || formatLocalClock(Date.now());
 
-    const patchDelivery = (
-      status: DeliveryStatus,
-      seq?: number,
-    ) => {
-      set((s) => ({
-        messagesByConversation: {
-          ...s.messagesByConversation,
-          [conversationId]: (s.messagesByConversation[conversationId] ?? []).map(
-            (m) =>
-              m.id === messageId
-                ? {
-                    ...m,
-                    deliveryStatus: status,
-                    messageSeq: seq ?? m.messageSeq,
-                  }
-                : m,
-          ),
-        },
-      }));
-    };
-
-    patchDelivery("sending");
+    patchMessageDelivery(
+      conversationId,
+      messageId,
+      { deliveryStatus: "sending" },
+      { accountScopeGen },
+    );
 
     if (get().source !== "daemon") {
-      patchDelivery("sent");
+      patchMessageDelivery(
+        conversationId,
+        messageId,
+        { deliveryStatus: "sent" },
+        { accountScopeGen },
+      );
       return;
     }
 
     try {
-      const conv = get().conversations.find((c) => c.id === conversationId);
-      const project = get().projects.find((p) => p.id === conv?.projectId);
-      if (!conv || !project) {
-        throw new Error("conversation or project not found");
-      }
-
-      // Same pipeline as sendMessage: validate → append → Hub uplink.
-      const mentionProfiles = await loadMentionProfiles(
-        conversationId,
-        conv.participatingAgents,
-        conv.participatingBots,
-      );
-      const installedAgents = new Set(
-        get()
-          .clis.filter((c) => c.installed)
-          .map((c) => c.agent.toLowerCase()),
-      );
-      resolveDispatchTargets({
-        messageBody,
-        participatingAgents: membershipTokensFromConv(conv),
-        installedAgents,
-        mentionProfiles,
-      });
-      const structuredMentions = buildStructuredMentions(
-        messageBody,
-        mentionProfiles,
-      );
-      if (!cloudAuthenticated()) {
-        throw new Error(
-          "Sign in to send collaboration messages. Bot delivery requires Account Hub sync.",
-        );
-      }
-
-      const retryAt = failed.createdAtMs ?? Date.now();
-      const retryClock = formatLocalClock(retryAt) || formatLocalClock(Date.now());
-      const cloudAck = await syncUserMessageToCloud({
+      await deliverMessage(get, set, {
         conversationId,
         messageId,
-        text: messageBody,
-        title: conv.title,
+        messageBody,
         replyToMessageId,
         createdAtMs: retryAt,
-        agentRuntimes: (() => {
-          const fromBots = conv.participatingBots
-            ?.map((b) => b.runtime.trim().toLowerCase())
-            .filter(Boolean);
-          if (fromBots && fromBots.length > 0) return fromBots;
-          return conv.participatingAgents;
-        })(),
-        messageSource: "client_live",
-        mentions:
-          structuredMentions.length > 0 ? structuredMentions : undefined,
+        clock: retryClock,
+        accountScopeGen,
       });
-      patchDelivery("sent", cloudAck?.messageSeq);
-      set((s) => ({
-        messagesByConversation: {
-          ...s.messagesByConversation,
-          [conversationId]: (s.messagesByConversation[conversationId] ?? []).map(
-            (m) =>
-              m.id === messageId
-                ? { ...m, time: retryClock, createdAtMs: retryAt }
-                : m,
-          ),
-        },
-      }));
-      const railPreview =
-        messageBody.trim().length > 88
-          ? `${messageBody.trim().slice(0, 88)}…`
-          : messageBody.trim();
-      patchRailActivity(set, conversationId, railPreview, retryAt);
-      try {
-        await daemonApi.appendUserMessage(
-          conversationId,
-          messageBody,
-          messageId,
-        );
-      } catch (localErr) {
-        console.warn(
-          "[workspace] local workbench projection after Hub Ack failed",
-          localErr,
-        );
-      }
-      set({ actionError: null });
-      void get().loadTimeline(conversationId, { quiet: true });
-
-      await quietRefreshConversationSlices(get, conversationId);
-      await minosQueryClient.invalidateQueries({
-        queryKey: queryKeys.conversations(conv.projectId),
-      });
-      await minosQueryClient.invalidateQueries({
-        queryKey: queryKeys.projectSessions(conv.projectId),
-      });
-      await minosQueryClient.invalidateQueries({
-        queryKey: queryKeys.inspectorSessions(conversationId),
-      });
-      await get().loadConversations(conv.projectId);
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
+      if (accountScopeGen !== getAccountScopeGeneration()) {
+        throw e;
+      }
       set({ actionError: message });
-      // Only flip to failed when still sending (append never succeeded).
-      const stillSending = (get().messagesByConversation[conversationId] ?? [])
-        .find((m) => m.id === messageId)
-        ?.deliveryStatus === "sending";
+      const stillSending =
+        (get().messagesByConversation[conversationId] ?? []).find(
+          (m) => m.id === messageId,
+        )?.deliveryStatus === "sending";
       if (stillSending) {
-        patchDelivery("failed");
+        patchMessageDelivery(
+          conversationId,
+          messageId,
+          { deliveryStatus: "failed" },
+          { accountScopeGen },
+        );
       }
       await quietRefreshConversationSlices(get, conversationId);
       throw e;

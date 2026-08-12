@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use anyhow::{anyhow, Context, Result};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 const MAX_ENTRIES: usize = 2_000;
@@ -20,6 +20,9 @@ pub struct ImOutboxEntryDto {
     pub kind: String,
     pub conversation_id: String,
     pub client_message_id: String,
+    /// Immutable owner account. Empty = legacy quarantine (never claim).
+    #[serde(default)]
+    pub account_id: String,
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
@@ -73,6 +76,7 @@ impl ImOutboxStore {
                id                  TEXT NOT NULL,
                kind                TEXT NOT NULL,
                conversation_id     TEXT NOT NULL,
+               account_id          TEXT NOT NULL DEFAULT '',
                text                TEXT NOT NULL,
                title               TEXT,
                reply_to_message_id TEXT,
@@ -93,11 +97,23 @@ impl ImOutboxStore {
              CREATE INDEX IF NOT EXISTS idx_im_outbox_status_due
                ON im_outbox(status, next_attempt_at);
              CREATE INDEX IF NOT EXISTS idx_im_outbox_conversation
-               ON im_outbox(conversation_id, created_at_ms);",
+               ON im_outbox(conversation_id, created_at_ms);
+             CREATE INDEX IF NOT EXISTS idx_im_outbox_account_status_due
+               ON im_outbox(account_id, status, next_attempt_at);",
         )?;
         // Optional structured mentions JSON (AppendMessage wire targets).
         // ALTER is idempotent: ignore "duplicate column" on existing DBs.
         let _ = conn.execute("ALTER TABLE im_outbox ADD COLUMN mentions_json TEXT", []);
+        // Account ownership (empty = legacy quarantine). Idempotent ALTER.
+        let _ = conn.execute(
+            "ALTER TABLE im_outbox ADD COLUMN account_id TEXT NOT NULL DEFAULT ''",
+            [],
+        );
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_im_outbox_account_status_due
+               ON im_outbox(account_id, status, next_attempt_at)",
+            [],
+        );
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -109,7 +125,7 @@ impl ImOutboxStore {
             .lock()
             .map_err(|_| anyhow!("im_outbox lock poisoned"))?;
         let mut stmt = conn.prepare(
-            "SELECT client_message_id, id, kind, conversation_id, text, title,
+            "SELECT client_message_id, id, kind, conversation_id, account_id, text, title,
                     reply_to_message_id, agent_runtimes_json, agent_id, agent_session_id,
                     client_sent_at_ms, message_source, mentions_json, status, attempts,
                     next_attempt_at, last_error, created_at_ms, updated_at_ms
@@ -177,17 +193,50 @@ impl ImOutboxStore {
             .conn
             .lock()
             .map_err(|_| anyhow!("im_outbox lock poisoned"))?;
-        conn.execute(
+        // Capacity check + insert in one transaction so a rejected row never
+        // remains durable (and later drainable) after the caller saw an error.
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| anyhow!("im_outbox begin tx: {e}"))?;
+
+        let existing: Option<String> = tx
+            .query_row(
+                "SELECT status FROM im_outbox WHERE client_message_id = ?1",
+                params![entry.client_message_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+
+        // New rows that would push unacked over the cap must fail before insert.
+        // Updates of existing unacked rows are allowed (status/backoff churn).
+        if existing.is_none() {
+            let unacked: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM im_outbox WHERE status != 'acked'",
+                [],
+                |r| r.get(0),
+            )?;
+            let inserting_unacked = entry.status != "acked";
+            if inserting_unacked && unacked >= MAX_ENTRIES as i64 {
+                return Err(anyhow!(
+                    "im_outbox_capacity: {} unacked intents already at max {}",
+                    unacked,
+                    MAX_ENTRIES
+                ));
+            }
+        }
+
+        tx.execute(
             "INSERT INTO im_outbox (
-                client_message_id, id, kind, conversation_id, text, title,
+                client_message_id, id, kind, conversation_id, account_id, text, title,
                 reply_to_message_id, agent_runtimes_json, agent_id, agent_session_id,
                 client_sent_at_ms, message_source, mentions_json, status, attempts,
                 next_attempt_at, last_error, created_at_ms, updated_at_ms
-             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)
              ON CONFLICT(client_message_id) DO UPDATE SET
                 id=excluded.id,
                 kind=excluded.kind,
                 conversation_id=excluded.conversation_id,
+                account_id=excluded.account_id,
                 text=excluded.text,
                 title=excluded.title,
                 reply_to_message_id=excluded.reply_to_message_id,
@@ -207,6 +256,7 @@ impl ImOutboxStore {
                 entry.id,
                 entry.kind,
                 entry.conversation_id,
+                entry.account_id,
                 entry.text,
                 entry.title,
                 entry.reply_to_message_id,
@@ -225,19 +275,21 @@ impl ImOutboxStore {
             ],
         )?;
         // Compact oldest acked rows when over cap; never delete unacked.
-        Self::compact_acked_locked(&conn)?;
-        let unacked: i64 = conn.query_row(
+        Self::compact_acked_locked(&tx)?;
+        let unacked: i64 = tx.query_row(
             "SELECT COUNT(*) FROM im_outbox WHERE status != 'acked'",
             [],
             |r| r.get(0),
         )?;
         if unacked > MAX_ENTRIES as i64 {
+            // Defensive: should not happen after pre-check; abort without commit.
             return Err(anyhow!(
                 "im_outbox_capacity: {} unacked intents exceed max {}",
                 unacked,
                 MAX_ENTRIES
             ));
         }
+        tx.commit()?;
         Ok(())
     }
 
@@ -272,16 +324,17 @@ impl ImOutboxStore {
 fn insert_entry(tx: &rusqlite::Transaction<'_>, entry: &ImOutboxEntryDto) -> Result<()> {
     tx.execute(
         "INSERT INTO im_outbox (
-            client_message_id, id, kind, conversation_id, text, title,
+            client_message_id, id, kind, conversation_id, account_id, text, title,
             reply_to_message_id, agent_runtimes_json, agent_id, agent_session_id,
             client_sent_at_ms, message_source, mentions_json, status, attempts,
             next_attempt_at, last_error, created_at_ms, updated_at_ms
-         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
+         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)",
         params![
             entry.client_message_id,
             entry.id,
             entry.kind,
             entry.conversation_id,
+            entry.account_id,
             entry.text,
             entry.title,
             entry.reply_to_message_id,
@@ -318,30 +371,31 @@ fn mentions_json(v: &Option<Vec<serde_json::Value>>) -> Option<String> {
 }
 
 fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ImOutboxEntryDto> {
-    let runtimes_raw: Option<String> = row.get(7)?;
+    let runtimes_raw: Option<String> = row.get(8)?;
     let agent_runtimes = runtimes_raw.and_then(|s| serde_json::from_str(&s).ok());
-    let mentions_raw: Option<String> = row.get(12)?;
+    let mentions_raw: Option<String> = row.get(13)?;
     let mentions = mentions_raw.and_then(|s| serde_json::from_str(&s).ok());
     Ok(ImOutboxEntryDto {
         client_message_id: row.get(0)?,
         id: row.get(1)?,
         kind: row.get(2)?,
         conversation_id: row.get(3)?,
-        text: row.get(4)?,
-        title: row.get(5)?,
-        reply_to_message_id: row.get(6)?,
+        account_id: row.get(4)?,
+        text: row.get(5)?,
+        title: row.get(6)?,
+        reply_to_message_id: row.get(7)?,
         agent_runtimes,
-        agent_id: row.get(8)?,
-        agent_session_id: row.get(9)?,
-        client_sent_at_ms: row.get(10)?,
-        message_source: row.get(11)?,
+        agent_id: row.get(9)?,
+        agent_session_id: row.get(10)?,
+        client_sent_at_ms: row.get(11)?,
+        message_source: row.get(12)?,
         mentions,
-        status: row.get(13)?,
-        attempts: row.get(14)?,
-        next_attempt_at: row.get(15)?,
-        last_error: row.get(16)?,
-        created_at_ms: row.get(17)?,
-        updated_at_ms: row.get(18)?,
+        status: row.get(14)?,
+        attempts: row.get(15)?,
+        next_attempt_at: row.get(16)?,
+        last_error: row.get(17)?,
+        created_at_ms: row.get(18)?,
+        updated_at_ms: row.get(19)?,
     })
 }
 
@@ -361,6 +415,7 @@ mod tests {
             kind: "user_message".into(),
             conversation_id: "c1".into(),
             client_message_id: id.into(),
+            account_id: "acct-a".into(),
             text: "hi".into(),
             title: None,
             reply_to_message_id: None,
@@ -443,5 +498,22 @@ mod tests {
         assert!(all
             .iter()
             .all(|e| e.status != "acked" || e.client_message_id != "a0"));
+    }
+
+    #[test]
+    fn upsert_capacity_rejects_without_persisting() {
+        let dir = tempdir().unwrap();
+        let store = ImOutboxStore::open_path(dir.path().join("t.db")).unwrap();
+        for i in 0..MAX_ENTRIES {
+            store.upsert(&sample(&format!("p{i}"), "pending")).unwrap();
+        }
+        let err = store.upsert(&sample("overflow", "pending")).unwrap_err();
+        assert!(
+            err.to_string().contains("im_outbox_capacity"),
+            "expected capacity error, got {err}"
+        );
+        let all = store.list_all().unwrap();
+        assert_eq!(all.len(), MAX_ENTRIES);
+        assert!(!all.iter().any(|e| e.client_message_id == "overflow"));
     }
 }

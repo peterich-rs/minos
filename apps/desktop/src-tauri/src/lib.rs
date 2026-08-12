@@ -144,6 +144,7 @@ pub fn run() {
             daemon_host_prepare_link,
             daemon_host_sign_link_proof,
             daemon_host_apply_link_token,
+            daemon_host_clear_credential,
             is_auto_update_supported,
             is_updater_plugin_enabled,
             prepare_for_app_update,

@@ -11,8 +11,8 @@ use minos_protocol::{
     AppendConversationMessageParams, AppendConversationMessageResponse, ApprovalDecisionRequest,
     CloseSessionRequest, CreateConversationParams, CreateConversationResponse,
     CreateProjectRequest, CreateProjectResponse, HealthResponse, HostApplyLinkTokenParams,
-    HostApplyLinkTokenResponse, HostPrepareLinkResponse, HostSignLinkProofParams,
-    HostSignLinkProofResponse, InterruptSessionRequest, ListClisResponse,
+    HostApplyLinkTokenResponse, HostClearCredentialResponse, HostPrepareLinkResponse,
+    HostSignLinkProofParams, HostSignLinkProofResponse, InterruptSessionRequest, ListClisResponse,
     ListConversationAgentSessionsParams, ListConversationAgentSessionsResponse,
     ListConversationMessagesParams, ListConversationMessagesResponse, ListConversationsParams,
     ListConversationsResponse, ListProjectsResponse, LocalDaemonRpcServer, LocalSessionSnapshot,
@@ -96,6 +96,15 @@ impl LocalDaemonRpcServer for LocalRpcImpl {
         relay
             .apply_link_token(&req.host_installation_token)
             .map_err(rpc_err)
+    }
+
+    async fn host_clear_credential(
+        &self,
+    ) -> jsonrpsee::core::RpcResult<HostClearCredentialResponse> {
+        let Some(relay) = self.relay.as_ref() else {
+            return Err(host_link_unavailable());
+        };
+        relay.clear_link_token().map_err(rpc_err)
     }
 
     async fn list_clis(&self) -> jsonrpsee::core::RpcResult<ListClisResponse> {

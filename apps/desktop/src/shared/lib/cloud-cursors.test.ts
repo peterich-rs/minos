@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   advanceTopicCursor,
+  clearAllTopicCursors,
   clearTopicCursor,
   conversationTopic,
   accountTopic,
@@ -96,5 +97,24 @@ describe("topic helpers + storage", () => {
       JSON.parse(bag.get(CLOUD_CURSOR_STORAGE_KEY)! )["conversation:legacy"],
       42,
     );
+  });
+});
+
+describe("clearAllTopicCursors", () => {
+  it("wipes storage for account leave", () => {
+    const store = new Map<string, string>();
+    const storage = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => {
+        store.set(k, v);
+      },
+      removeItem: (k: string) => {
+        store.delete(k);
+      },
+    };
+    saveTopicCursors({ "account:a": 1, "conversation:c": 2 }, storage);
+    assert.equal(loadTopicCursors(storage)["account:a"], 1);
+    clearAllTopicCursors(storage);
+    assert.deepEqual(loadTopicCursors(storage), {});
   });
 });

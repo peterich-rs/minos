@@ -1,4 +1,4 @@
-import type { SessionStatus } from "./mock-data";
+import type { SessionStatus } from "../domain/collaboration.ts";
 
 /**
  * Derive UI session status from daemon session status + optional pending-approval

@@ -1,6 +1,7 @@
 import { memo, useState } from "react";
 import { Wrench } from "lucide-react";
-import { agentMeta, type TimelineMessage } from "@/shared/lib/mock-data";
+import type { TimelineMessage } from "@/shared/domain/collaboration";
+import { agentMeta } from "@/shared/lib/mock-data";
 import { shortSessionId, type KnownAgent } from "@/shared/lib/agent-route";
 import { Avatar } from "@/shared/ui/Avatar";
 import {

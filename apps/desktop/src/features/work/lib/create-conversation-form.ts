@@ -3,7 +3,7 @@
  * Keeps form defaults / validation out of the React component.
  */
 
-import type { ConversationPriority } from "@/shared/lib/mock-data";
+import type { ConversationPriority } from "@/shared/domain/collaboration";
 
 /** How the conversation binds to git on create. */
 export type ConversationGitMode = "worktree" | "inherit";

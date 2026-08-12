@@ -23,7 +23,8 @@ import {
   type CreateConversationFormInput,
   type ProfileBriefSource,
 } from "@/features/work/lib/create-conversation-form";
-import { agentMeta, type AgentRuntime } from "@/shared/lib/mock-data";
+import type { AgentRuntime } from "@/shared/domain/collaboration";
+import { agentMeta } from "@/shared/lib/mock-data";
 import { cn } from "@/shared/lib/utils";
 import { Button } from "@/shared/ui/button";
 import {

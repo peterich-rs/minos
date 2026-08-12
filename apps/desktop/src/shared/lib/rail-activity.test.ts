@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { TimelineMessage } from "./mock-data.ts";
+import type { TimelineMessage } from "../domain/collaboration.ts";
 import {
   positiveMs,
   railActivityFromTimeline,

@@ -40,11 +40,14 @@ import {
   type CloudMode,
 } from "@/shared/lib/host-status";
 import { daemonApi } from "@/shared/lib/daemon";
-import {
-  registerHostCredential,
-  waitForCloudOnline,
-} from "@/features/host/lib/ensure-host-connection";
+import { runHostEnsure } from "@/features/host/lib/host-connection-machine";
 import type { DesktopAuthPhase } from "@/shared/lib/desktop-root-gate";
+import { registerCloudAuthProvider } from "@/shared/lib/cloud-auth";
+import {
+  bumpAccountScopeGeneration,
+  leaveAccountScope,
+} from "@/store/leave-account-scope";
+import { refreshDaemonCloudFlags } from "@/store/daemon-status-port";
 
 export type AuthMode = "login" | "register";
 
@@ -55,6 +58,11 @@ type AccountState = {
   session: MinosSession | null;
   /** Internal bind snapshot (diagnostics); not a product "Link" flag. */
   hostBind: HostBindState;
+  /**
+   * Account that owns the live host credential for this process.
+   * Null after leave; Host online requires match with session.accountId.
+   */
+  hostCredentialAccountId: string | null;
   /**
    * Host runtime readiness (`/ws/host`): online | connecting | offline | unknown.
    * Secondary signal — bot execution on this Mac. Not product primary Online.
@@ -113,29 +121,8 @@ function isCloudConfigured(): boolean {
 
 let ensureInFlight: Promise<void> | null = null;
 let ensureGeneration = 0;
-
-type DaemonCloudFlags = {
-  cloudOnline: boolean;
-  hasHostToken: boolean;
-};
-
-async function refreshDaemonCloudFlags(): Promise<DaemonCloudFlags> {
-  try {
-    const { useWorkspaceStore } = await import("@/store/workspace-store");
-    await useWorkspaceStore.getState().refreshDaemonStatus();
-    const connection = useWorkspaceStore.getState().connection;
-    return {
-      cloudOnline: connection?.cloudOnline === true,
-      hasHostToken: connection?.hasHostToken === true,
-    };
-  } catch {
-    return { cloudOnline: false, hasHostToken: false };
-  }
-}
-
-async function refreshCloudOnlineFlag(): Promise<boolean> {
-  return (await refreshDaemonCloudFlags()).cloudOnline;
-}
+let hydrateInFlight: Promise<void> | null = null;
+let hydrateGeneration = 0;
 
 function applyAuthSuccess(
   set: (
@@ -146,11 +133,24 @@ function applyAuthSuccess(
   get: () => AccountState,
   session: MinosSession,
 ): void {
+  const prevAccountId = get().session?.accountId?.trim() ?? null;
+  const nextAccountId = session.accountId.trim();
+  if (prevAccountId && prevAccountId !== nextAccountId) {
+    ensureGeneration += 1;
+    ensureInFlight = null;
+    hydrateGeneration += 1;
+    hydrateInFlight = null;
+    leaveAccountScope("account-switch");
+  }
   saveStoredSession(session);
   const hostBind = loadStoredHostBind(session.accountId);
+  const hostOwned =
+    get().hostCredentialAccountId === nextAccountId && hostBind.bound;
   set({
     session,
     hostBind,
+    // New account (or unbound) must re-establish host ownership before online.
+    hostCredentialAccountId: hostOwned ? nextAccountId : null,
     cloudStatus: "connecting",
     accountSyncStatus: "connecting",
     cloudError: null,
@@ -159,16 +159,21 @@ function applyAuthSuccess(
     error: null,
     hydrated: true,
   });
-  void import("@/shared/lib/im-cloud-bridge").then(({ ensureImCloudBridge }) =>
+  void import("@/store/im/im-cloud-bridge").then(({ ensureImCloudBridge }) =>
     ensureImCloudBridge(),
   );
-  void get().ensureCloudConnection();
+  const forceReregister =
+    !hostOwned || prevAccountId !== nextAccountId || !hostBind.bound;
+  void get().ensureCloudConnection(
+    forceReregister ? { forceReregister: true } : undefined,
+  );
 }
 
 export const useAccountStore = create<AccountState>()((set, get) => ({
   deviceId: ensureDesktopDeviceId(),
   session: null,
   hostBind: { ...EMPTY_HOST_BIND },
+  hostCredentialAccountId: null,
   cloudStatus: "unknown",
   accountSyncStatus: "unknown",
   cloudError: null,
@@ -185,64 +190,86 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
   isSupabaseReady: () => isSupabaseConfigured(),
 
   hydrateAuth: async () => {
-    set({ authPhase: "booting", error: null });
-    const stored = loadStoredSession();
-    if (!stored) {
-      set({
-        session: null,
-        hostBind: { ...EMPTY_HOST_BIND },
-        cloudStatus: "unknown",
-        accountSyncStatus: "unknown",
-        cloudError: null,
-        authPhase: "unauthenticated",
-        hydrated: true,
-      });
-      return;
-    }
+    if (hydrateInFlight) return hydrateInFlight;
+    const gen = ++hydrateGeneration;
+    hydrateInFlight = (async () => {
+      set({ authPhase: "booting", error: null });
+      const stored = loadStoredSession();
+      if (!stored) {
+        if (gen !== hydrateGeneration) return;
+        set({
+          session: null,
+          hostBind: { ...EMPTY_HOST_BIND },
+          hostCredentialAccountId: null,
+          cloudStatus: "unknown",
+          accountSyncStatus: "unknown",
+          cloudError: null,
+          authPhase: "unauthenticated",
+          hydrated: true,
+        });
+        return;
+      }
 
-    if (isAccessTokenFresh(stored)) {
-      set({
-        session: stored,
-        hostBind: loadStoredHostBind(stored.accountId),
-        cloudStatus: "connecting",
-        accountSyncStatus: "connecting",
-        cloudError: null,
-        authPhase: "authenticated",
-        hydrated: true,
-      });
-      void import("@/shared/lib/im-cloud-bridge").then(({ ensureImCloudBridge }) =>
-        ensureImCloudBridge(),
-      );
-      void get().ensureCloudConnection();
-      return;
-    }
+      if (isAccessTokenFresh(stored)) {
+        if (gen !== hydrateGeneration) return;
+        const hostBind = loadStoredHostBind(stored.accountId);
+        set({
+          session: stored,
+          hostBind,
+          hostCredentialAccountId: hostBind.bound ? stored.accountId : null,
+          cloudStatus: "connecting",
+          accountSyncStatus: "connecting",
+          cloudError: null,
+          authPhase: "authenticated",
+          hydrated: true,
+        });
+        void import("@/store/im/im-cloud-bridge").then(({ ensureImCloudBridge }) =>
+          ensureImCloudBridge(),
+        );
+        void get().ensureCloudConnection(
+          hostBind.bound ? undefined : { forceReregister: true },
+        );
+        return;
+      }
 
-    try {
-      const tokens = await refreshSession(
-        get().deviceId,
-        stored.refreshToken,
-      );
-      const session: MinosSession = {
-        ...stored,
-        accessToken: tokens.access_token,
-        refreshToken: tokens.refresh_token,
-        expiresInSec: tokens.expires_in,
-        issuedAtMs: Date.now(),
-      };
-      applyAuthSuccess(set, get, session);
-    } catch {
-      clearStoredSession();
-      set({
-        session: null,
-        hostBind: { ...EMPTY_HOST_BIND },
-        cloudStatus: "unknown",
-        accountSyncStatus: "unknown",
-        cloudError: null,
-        authPhase: "unauthenticated",
-        hydrated: true,
-        error: null,
-      });
-    }
+      try {
+        const tokens = await refreshSession(
+          get().deviceId,
+          stored.refreshToken,
+        );
+        if (gen !== hydrateGeneration) return;
+        const session: MinosSession = {
+          ...stored,
+          accessToken: tokens.access_token,
+          refreshToken: tokens.refresh_token,
+          expiresInSec: tokens.expires_in,
+          issuedAtMs: Date.now(),
+        };
+        applyAuthSuccess(set, get, session);
+      } catch {
+        if (gen !== hydrateGeneration) return;
+        clearStoredSession();
+        ensureGeneration += 1;
+        ensureInFlight = null;
+        leaveAccountScope("auth-invalid");
+        set({
+          session: null,
+          hostBind: { ...EMPTY_HOST_BIND },
+          hostCredentialAccountId: null,
+          cloudStatus: "unknown",
+          accountSyncStatus: "unknown",
+          cloudError: null,
+          authPhase: "unauthenticated",
+          hydrated: true,
+          error: null,
+        });
+      }
+    })().finally(() => {
+      if (gen === hydrateGeneration) {
+        hydrateInFlight = null;
+      }
+    });
+    return hydrateInFlight;
   },
 
   signIn: async (email, password) => {
@@ -289,6 +316,10 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
     const { session, deviceId } = get();
     set({ busy: true, error: null });
     ensureGeneration += 1;
+    ensureInFlight = null;
+    hydrateGeneration += 1;
+    hydrateInFlight = null;
+    bumpAccountScopeGeneration();
     if (session) {
       try {
         await logoutSession(deviceId, session.accessToken, session.refreshToken);
@@ -298,12 +329,11 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
     }
     await signOutSupabase();
     clearStoredSession();
-    void import("@/shared/lib/im-cloud-bridge").then(({ stopImCloudBridge }) =>
-      stopImCloudBridge(),
-    );
+    leaveAccountScope("sign-out");
     set({
       session: null,
       hostBind: { ...EMPTY_HOST_BIND },
+      hostCredentialAccountId: null,
       cloudStatus: "unknown",
       accountSyncStatus: "unknown",
       cloudError: null,
@@ -336,87 +366,79 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
 
       set({ cloudStatus: "connecting", cloudError: null });
 
-      // ── Steady state: never re-register if we already have hit_ ────────
-      // Product has no "Link". Protocol only needs hit_ once. Calling
-      // POST /v1/hosts/link again revokes the live token → 401 races.
-      const flags = await refreshDaemonCloudFlags();
-      if (gen !== ensureGeneration) return;
+      const accountId = session.accountId.trim();
+      const result = await runHostEnsure(
+        {
+          forceReregister,
+          sessionAccountId: accountId,
+          hostCredentialAccountId: get().hostCredentialAccountId,
+        },
+        {
+          refreshFlags: refreshDaemonCloudFlags,
+          isOnline: async () =>
+            (await refreshDaemonCloudFlags()).cloudOnline,
+          registerPorts: {
+            prepareLink: () => daemonApi.hostPrepareLink(),
+            signLinkProof: (installationId, nonce) =>
+              daemonApi.hostSignLinkProof(installationId, nonce),
+            applyLinkToken: (token) => daemonApi.hostApplyLinkToken(token),
+            registerHost: (input) =>
+              cloudLinkHost(get().deviceId, session.accessToken, input),
+          },
+          hostDisplayName: PROJECT_HOST_THIS_MAC,
+          waitOpts: { timeoutMs: 20_000, intervalMs: 500 },
+          // Account leave/switch bumps ensureGeneration; also reject if the
+          // session account changed mid-flight (deferred A after B logged in).
+          isCurrent: () =>
+            gen === ensureGeneration &&
+            get().session?.accountId?.trim() === accountId,
+        },
+      );
 
-      if (flags.cloudOnline) {
+      if (gen !== ensureGeneration) return;
+      if (get().session?.accountId?.trim() !== accountId) return;
+
+      if (result.kind === "online") {
         set({ cloudStatus: "online", cloudError: null });
         return;
       }
 
-      if (!forceReregister && flags.hasHostToken) {
-        // Credential exists — only wait for dialer; do not mint/revoke.
-        const online = await waitForCloudOnline(refreshCloudOnlineFlag, {
-          timeoutMs: 20_000,
-          intervalMs: 500,
-        });
-        if (gen !== ensureGeneration) return;
-        if (online) {
-          set({ cloudStatus: "online", cloudError: null });
-          return;
-        }
-        // Still offline with a local hit_: backend down or token dead.
-        // Do **not** auto-rotate here (would thrash). Retry uses forceReregister.
+      if (result.kind === "offline") {
         set({
           cloudStatus: "offline",
-          cloudError:
-            "Has local host credential but server is unreachable. Check minos-backend, then Retry.",
+          cloudError: result.message,
         });
         return;
       }
 
-      // ── Missing hit_ or explicit Retry: one silent register ────────────
-      const outcome = await registerHostCredential(
-        {
-          prepareLink: () => daemonApi.hostPrepareLink(),
-          signLinkProof: (installationId, nonce) =>
-            daemonApi.hostSignLinkProof(installationId, nonce),
-          applyLinkToken: (token) => daemonApi.hostApplyLinkToken(token),
-          registerHost: (input) =>
-            cloudLinkHost(get().deviceId, session.accessToken, input),
-        },
-        PROJECT_HOST_THIS_MAC,
-      );
-
-      if (gen !== ensureGeneration) return;
-
-      if (!outcome.ok) {
+      if (result.kind === "register-failed") {
         set({
           cloudStatus: "offline",
-          cloudError: `Connect failed (${outcome.stage}): ${outcome.message}`,
+          hostCredentialAccountId: null,
+          cloudError: `Connect failed (${result.stage}): ${result.message}`,
         });
         return;
       }
 
       const hostBind: HostBindState = {
         bound: true,
-        hostInstallationId: outcome.hostInstallationId,
-        hostDisplayName: outcome.hostDisplayName,
-        boundAtMs: outcome.linkedAtMs,
-        pairId: outcome.pairId,
+        hostInstallationId: result.hostInstallationId,
+        hostDisplayName: result.hostDisplayName,
+        boundAtMs: result.linkedAtMs,
+        pairId: result.pairId,
       };
       saveStoredHostBind(session.accountId, hostBind);
-      set({ hostBind });
+      set({ hostBind, hostCredentialAccountId: accountId });
 
-      const online = await waitForCloudOnline(refreshCloudOnlineFlag, {
-        timeoutMs: 20_000,
-        intervalMs: 500,
-      });
-
-      if (gen !== ensureGeneration) return;
-
-      if (online) {
+      if (result.kind === "registered-online") {
         set({ cloudStatus: "online", cloudError: null });
-      } else {
-        set({
-          cloudStatus: "offline",
-          cloudError:
-            "Signed in but not connected to the server yet. Retry or check that minos-backend is running.",
-        });
+        return;
       }
+
+      set({
+        cloudStatus: "offline",
+        cloudError: result.message,
+      });
     };
 
     ensureInFlight = run().finally(() => {
@@ -432,8 +454,10 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
   },
 
   syncCloudFromCloud: (cloudOnline) => {
-    const { session, cloudStatus } = get();
+    const { session, cloudStatus, hostCredentialAccountId } = get();
     if (!session) return;
+    // Foreign or cleared host ownership must never paint Host online.
+    if (hostCredentialAccountId !== session.accountId) return;
     // Do not clobber an in-flight ensure.
     if (cloudStatus === "connecting") return;
     if (cloudOnline === true) {
@@ -464,3 +488,17 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
     }
   },
 }));
+
+// Shared transport reads auth via this port — never imports account-store.
+registerCloudAuthProvider(() => {
+  const { deviceId, session, authPhase } = useAccountStore.getState();
+  const accessToken = session?.accessToken?.trim() ?? "";
+  const accountId = session?.accountId?.trim() ?? "";
+  if (!accessToken || !accountId) return null;
+  return {
+    deviceId,
+    accessToken,
+    accountId,
+    authPhase,
+  };
+});

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { GitBranch, Layers } from "lucide-react";
-import type { Conversation } from "@/shared/lib/mock-data";
+import type { Conversation } from "@/shared/domain/collaboration";
 import {
   MetaChip,
   PriorityPlaceholder,
@@ -141,27 +141,38 @@ export function TimelineHeader({
           <PriorityTag
             priority={conversation.priority}
             onClick={() => {
-              if (conversationId) {
-                void cycleConversationPriority(conversationId);
-              }
+              if (!conversationId) return;
+              void (async () => {
+                await cycleConversationPriority(conversationId);
+                const actionError =
+                  useWorkspaceStore.getState().actionError;
+                if (actionError) toast.error(actionError);
+              })();
             }}
             title="Click to cycle priority"
           />
         ) : (
           <PriorityPlaceholder
             onClick={() => {
-              if (conversationId) {
-                void cycleConversationPriority(conversationId);
-              }
+              if (!conversationId) return;
+              void (async () => {
+                await cycleConversationPriority(conversationId);
+                const actionError =
+                  useWorkspaceStore.getState().actionError;
+                if (actionError) toast.error(actionError);
+              })();
             }}
           />
         )}
         <ProgressTag
           progress={conversation.progress ?? "todo"}
           onClick={() => {
-            if (conversationId) {
-              void cycleConversationProgress(conversationId);
-            }
+            if (!conversationId) return;
+            void (async () => {
+              await cycleConversationProgress(conversationId);
+              const actionError = useWorkspaceStore.getState().actionError;
+              if (actionError) toast.error(actionError);
+            })();
           }}
           title="Click to cycle progress"
         />

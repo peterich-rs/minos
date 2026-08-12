@@ -1,4 +1,4 @@
-import type { TimelineMessage } from "./mock-data.ts";
+import type { TimelineMessage } from "../domain/collaboration.ts";
 import { sortTimelineMessages } from "./timeline-order.ts";
 import { timelineMessageEqual } from "./list-identity.ts";
 
