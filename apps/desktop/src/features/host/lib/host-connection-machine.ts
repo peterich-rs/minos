@@ -10,7 +10,13 @@ import {
   waitForCloudOnline,
   type EnsureHostPorts,
   type EnsureHostOutcome,
+  type RegisterHostCredentialOptions,
 } from "./ensure-host-connection.ts";
+import {
+  enqueueHostCredentialOp,
+  isHostCredentialCurrent,
+  getHostCredentialGeneration,
+} from "./host-credential-controller.ts";
 
 export type HostEnsureInput = {
   forceReregister: boolean;
@@ -64,6 +70,8 @@ export type HostEnsureEffectPorts = {
   registerPorts: EnsureHostPorts;
   hostDisplayName: string;
   waitOpts?: { timeoutMs?: number; intervalMs?: number };
+  /** When false mid-register, apply is skipped (account leave/switch). */
+  isCurrent?: () => boolean;
 };
 
 export type HostEnsureRunResult =
@@ -119,10 +127,38 @@ export async function runHostEnsure(
     };
   }
 
-  const outcome: EnsureHostOutcome = await registerHostCredential(
-    ports.registerPorts,
-    ports.hostDisplayName,
+  // Serialize with leave/clear so deferred register never races apply.
+  const credGen = getHostCredentialGeneration();
+  const stillCurrent: NonNullable<RegisterHostCredentialOptions["isCurrent"]> =
+    () =>
+      isHostCredentialCurrent(credGen) && (ports.isCurrent?.() ?? true);
+
+  if (!stillCurrent()) {
+    return {
+      kind: "register-failed",
+      stage: "apply",
+      message: "Host registration superseded by account leave/switch",
+    };
+  }
+
+  const outcome: EnsureHostOutcome = await enqueueHostCredentialOp(
+    async (genAtEnqueue) => {
+      if (
+        !isHostCredentialCurrent(genAtEnqueue) ||
+        !(ports.isCurrent?.() ?? true)
+      ) {
+        return {
+          ok: false as const,
+          stage: "apply" as const,
+          message: "Host registration superseded by account leave/switch",
+        };
+      }
+      return registerHostCredential(ports.registerPorts, ports.hostDisplayName, {
+        isCurrent: stillCurrent,
+      });
+    },
   );
+
   if (!outcome.ok) {
     return {
       kind: "register-failed",
@@ -131,7 +167,22 @@ export async function runHostEnsure(
     };
   }
 
+  if (!stillCurrent()) {
+    return {
+      kind: "register-failed",
+      stage: "apply",
+      message: "Host registration superseded by account leave/switch",
+    };
+  }
+
   const online = await waitForCloudOnline(ports.isOnline, ports.waitOpts);
+  if (!stillCurrent()) {
+    return {
+      kind: "register-failed",
+      stage: "apply",
+      message: "Host registration superseded by account leave/switch",
+    };
+  }
   if (online) {
     return {
       kind: "registered-online",

@@ -141,27 +141,38 @@ export function TimelineHeader({
           <PriorityTag
             priority={conversation.priority}
             onClick={() => {
-              if (conversationId) {
-                void cycleConversationPriority(conversationId);
-              }
+              if (!conversationId) return;
+              void (async () => {
+                await cycleConversationPriority(conversationId);
+                const actionError =
+                  useWorkspaceStore.getState().actionError;
+                if (actionError) toast.error(actionError);
+              })();
             }}
             title="Click to cycle priority"
           />
         ) : (
           <PriorityPlaceholder
             onClick={() => {
-              if (conversationId) {
-                void cycleConversationPriority(conversationId);
-              }
+              if (!conversationId) return;
+              void (async () => {
+                await cycleConversationPriority(conversationId);
+                const actionError =
+                  useWorkspaceStore.getState().actionError;
+                if (actionError) toast.error(actionError);
+              })();
             }}
           />
         )}
         <ProgressTag
           progress={conversation.progress ?? "todo"}
           onClick={() => {
-            if (conversationId) {
-              void cycleConversationProgress(conversationId);
-            }
+            if (!conversationId) return;
+            void (async () => {
+              await cycleConversationProgress(conversationId);
+              const actionError = useWorkspaceStore.getState().actionError;
+              if (actionError) toast.error(actionError);
+            })();
           }}
           title="Click to cycle progress"
         />

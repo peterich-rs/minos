@@ -387,10 +387,16 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
           },
           hostDisplayName: PROJECT_HOST_THIS_MAC,
           waitOpts: { timeoutMs: 20_000, intervalMs: 500 },
+          // Account leave/switch bumps ensureGeneration; also reject if the
+          // session account changed mid-flight (deferred A after B logged in).
+          isCurrent: () =>
+            gen === ensureGeneration &&
+            get().session?.accountId?.trim() === accountId,
         },
       );
 
       if (gen !== ensureGeneration) return;
+      if (get().session?.accountId?.trim() !== accountId) return;
 
       if (result.kind === "online") {
         set({ cloudStatus: "online", cloudError: null });

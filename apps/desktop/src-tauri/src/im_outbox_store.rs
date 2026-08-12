@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use anyhow::{anyhow, Context, Result};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 const MAX_ENTRIES: usize = 2_000;
@@ -193,7 +193,39 @@ impl ImOutboxStore {
             .conn
             .lock()
             .map_err(|_| anyhow!("im_outbox lock poisoned"))?;
-        conn.execute(
+        // Capacity check + insert in one transaction so a rejected row never
+        // remains durable (and later drainable) after the caller saw an error.
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| anyhow!("im_outbox begin tx: {e}"))?;
+
+        let existing: Option<String> = tx
+            .query_row(
+                "SELECT status FROM im_outbox WHERE client_message_id = ?1",
+                params![entry.client_message_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+
+        // New rows that would push unacked over the cap must fail before insert.
+        // Updates of existing unacked rows are allowed (status/backoff churn).
+        if existing.is_none() {
+            let unacked: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM im_outbox WHERE status != 'acked'",
+                [],
+                |r| r.get(0),
+            )?;
+            let inserting_unacked = entry.status != "acked";
+            if inserting_unacked && unacked >= MAX_ENTRIES as i64 {
+                return Err(anyhow!(
+                    "im_outbox_capacity: {} unacked intents already at max {}",
+                    unacked,
+                    MAX_ENTRIES
+                ));
+            }
+        }
+
+        tx.execute(
             "INSERT INTO im_outbox (
                 client_message_id, id, kind, conversation_id, account_id, text, title,
                 reply_to_message_id, agent_runtimes_json, agent_id, agent_session_id,
@@ -243,19 +275,21 @@ impl ImOutboxStore {
             ],
         )?;
         // Compact oldest acked rows when over cap; never delete unacked.
-        Self::compact_acked_locked(&conn)?;
-        let unacked: i64 = conn.query_row(
+        Self::compact_acked_locked(&tx)?;
+        let unacked: i64 = tx.query_row(
             "SELECT COUNT(*) FROM im_outbox WHERE status != 'acked'",
             [],
             |r| r.get(0),
         )?;
         if unacked > MAX_ENTRIES as i64 {
+            // Defensive: should not happen after pre-check; abort without commit.
             return Err(anyhow!(
                 "im_outbox_capacity: {} unacked intents exceed max {}",
                 unacked,
                 MAX_ENTRIES
             ));
         }
+        tx.commit()?;
         Ok(())
     }
 
@@ -464,5 +498,22 @@ mod tests {
         assert!(all
             .iter()
             .all(|e| e.status != "acked" || e.client_message_id != "a0"));
+    }
+
+    #[test]
+    fn upsert_capacity_rejects_without_persisting() {
+        let dir = tempdir().unwrap();
+        let store = ImOutboxStore::open_path(dir.path().join("t.db")).unwrap();
+        for i in 0..MAX_ENTRIES {
+            store.upsert(&sample(&format!("p{i}"), "pending")).unwrap();
+        }
+        let err = store.upsert(&sample("overflow", "pending")).unwrap_err();
+        assert!(
+            err.to_string().contains("im_outbox_capacity"),
+            "expected capacity error, got {err}"
+        );
+        let all = store.list_all().unwrap();
+        assert_eq!(all.len(), MAX_ENTRIES);
+        assert!(!all.iter().any(|e| e.client_message_id == "overflow"));
     }
 }

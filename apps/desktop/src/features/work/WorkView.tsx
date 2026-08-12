@@ -27,7 +27,6 @@ export function WorkView() {
   const projectId = useUiStore((s) => s.projectId);
   const conversationId = useUiStore((s) => s.conversationId);
   const selectProject = useUiStore((s) => s.selectProject);
-  const selectConversation = useUiStore((s) => s.selectConversation);
   const listCollapsed = useUiStore((s) => s.conversationListCollapsed);
   const lastConversationByProject = useUiStore(
     (s) => s.lastConversationByProject,
@@ -63,7 +62,12 @@ export function WorkView() {
     : undefined;
   const listPhase = listStatus?.phase ?? "idle";
 
+  const ensureConversationSelection = useUiStore(
+    (s) => s.ensureConversationSelection,
+  );
+
   // Auto-select conversation when list is ready (not while still loading/idle).
+  // Uses ensureConversationSelection so Sessions/Board is not forced away.
   useEffect(() => {
     if (!resolvedProjectId) return;
     if (listPhase === "loading" || listPhase === "idle") return;
@@ -71,20 +75,20 @@ export function WorkView() {
       (c) => c.projectId === resolvedProjectId,
     );
     if (list.length === 0) {
-      if (conversationId) selectConversation(null);
+      if (conversationId) ensureConversationSelection(null);
       return;
     }
     if (conversationId && list.some((c) => c.id === conversationId)) return;
     const remembered = lastConversationByProject[resolvedProjectId];
     const pick =
       (remembered && list.find((c) => c.id === remembered)?.id) || list[0]!.id;
-    selectConversation(pick);
+    ensureConversationSelection(pick);
   }, [
     resolvedProjectId,
     conversations,
     conversationId,
     lastConversationByProject,
-    selectConversation,
+    ensureConversationSelection,
     listPhase,
   ]);
 

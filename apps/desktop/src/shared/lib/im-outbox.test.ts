@@ -15,6 +15,7 @@ import {
   markAcked,
   markFailed,
   markInflight,
+  MAX_OUTBOX_ENTRIES,
   outboxLaneKey,
   reclaimStaleInflight,
   resetImOutboxForTests,
@@ -28,6 +29,38 @@ describe("im-outbox", () => {
   beforeEach(async () => {
     enableMemoryOutboxForTests();
     await resetImOutboxForTests();
+  });
+
+  it("capacity failure leaves no memory or drainable row", async () => {
+    for (let i = 0; i < MAX_OUTBOX_ENTRIES; i++) {
+      await enqueueUserMessage({
+        accountId: TEST_ACCOUNT,
+        conversationId: "c-cap",
+        clientMessageId: `cap-${i}`,
+        text: "x",
+      });
+    }
+    await assert.rejects(
+      () =>
+        enqueueUserMessage({
+          accountId: TEST_ACCOUNT,
+          conversationId: "c-cap",
+          clientMessageId: "cap-overflow",
+          text: "overflow",
+        }),
+      /im_outbox_capacity/,
+    );
+    const snap = await getOutboxSnapshotForTests();
+    assert.equal(snap.length, MAX_OUTBOX_ENTRIES);
+    assert.equal(
+      snap.some((e) => e.clientMessageId === "cap-overflow"),
+      false,
+    );
+    const due = await listDuePending(undefined, TEST_ACCOUNT);
+    assert.equal(
+      due.some((e) => e.clientMessageId === "cap-overflow"),
+      false,
+    );
   });
 
   it("enqueues pending user messages and acks prevent re-project", async () => {

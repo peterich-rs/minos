@@ -51,6 +51,43 @@ describe("cloud-realtime account thin digest (R3)", () => {
   });
 });
 
+describe("cloud-realtime connection epoch", () => {
+  it("stale epoch must not clear current socket state", () => {
+    // Mirrors CloudRealtimeSession connect/onclose guards:
+    // only the live epoch may null this.ws and schedule reconnect.
+    type Sock = { id: number };
+    let connectionEpoch = 0;
+    let current: Sock | null = null;
+    let reconnectScheduled = 0;
+
+    const connect = (): { sock: Sock; onClose: () => void } => {
+      const epoch = ++connectionEpoch;
+      const sock: Sock = { id: epoch };
+      current = sock;
+      return {
+        sock,
+        onClose: () => {
+          // Stale epoch or superseded socket must no-op.
+          if (epoch !== connectionEpoch || current !== sock) return;
+          current = null;
+          reconnectScheduled += 1;
+        },
+      };
+    };
+
+    const first = connect();
+    const second = connect();
+    // Out-of-order: first ticket's close after second owns the socket.
+    first.onClose();
+    assert.equal(current, second.sock);
+    assert.equal(second.sock.id, 2);
+    assert.equal(reconnectScheduled, 0);
+    second.onClose();
+    assert.equal(current, null);
+    assert.equal(reconnectScheduled, 1);
+  });
+});
+
 describe("cloud-realtime conversation subscription LRU (R4)", () => {
   it("evicts oldest when over cap", async () => {
     const {

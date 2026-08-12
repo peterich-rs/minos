@@ -24,6 +24,21 @@ import {
   type CloudChatMessage,
 } from "@/shared/lib/minos-cloud";
 
+import {
+  mapAccountDigest,
+  mapMessage,
+  ACCOUNT_APPEND_KINDS,
+  ACCOUNT_RECALL_KINDS,
+  CONVERSATION_APPEND_KINDS,
+  CONVERSATION_RECALL_KINDS,
+  REACTION_KINDS,
+  type CloudInboxDigest,
+  type DurableMessagePayload,
+} from "@/shared/lib/cloud-realtime-map";
+
+export type { CloudInboxDigest } from "@/shared/lib/cloud-realtime-map";
+
+
 export {
   MAX_OPEN_CONVERSATION_SUBSCRIPTIONS,
   conversationSubscriptionLruTouch,
@@ -50,58 +65,6 @@ export type AppendMessageWsResult =
       code?: string;
       message?: string;
     };
-
-type DurableMessagePayload = {
-  kind?: string;
-  account_id?: string;
-  conversation_id?: string;
-  message_id?: string;
-  at_ms?: number;
-  /** Account thin digest fields (no nested full message). */
-  preview?: string;
-  sender_display_name?: string;
-  mentioned?: boolean;
-  message_seq?: number;
-  sender?: {
-    kind?: string;
-    account_id?: string;
-    agent_id?: string;
-  };
-  message?: {
-    message_id: string;
-    conversation_id: string;
-    text: string;
-    created_at_ms: number;
-    message_seq?: number;
-    sender_type?: string;
-    sender: {
-      kind?: string;
-      account_id?: string;
-      minos_id?: string;
-      display_name?: string;
-      bot_id?: string;
-      runtime_agent?: string;
-      name?: string | null;
-    };
-    reply_to?: { message_id: string } | null;
-    recalled_at_ms?: number | null;
-    mentioned_account_ids?: string[] | null;
-    mentioned_agent_ids?: string[] | null;
-  };
-};
-
-/** Account-topic T2 digest for rail/inbox only (R3). */
-export type CloudInboxDigest = {
-  conversationId: string;
-  messageId: string;
-  preview: string;
-  atMs: number;
-  senderAccountId: string;
-  senderDisplayName: string;
-  mentioned: boolean;
-  messageSeq?: number;
-  isRecall: boolean;
-};
 
 export type CloudRealtimeHandlers = {
   onChatMessage: (message: CloudChatMessage) => void;
@@ -165,111 +128,11 @@ export type CloudRealtimeHandlers = {
   }) => void;
 };
 
-function mapMessage(
-  raw: NonNullable<DurableMessagePayload["message"]>,
-): CloudChatMessage {
-  const s = raw.sender;
-  const isBot =
-    s.kind === "bot" ||
-    raw.sender_type === "agent" ||
-    Boolean(s.bot_id && !s.account_id);
-  const botId = (s.bot_id ?? s.account_id ?? "").trim();
-  const accountId = (s.account_id ?? "").trim();
-  return {
-    messageId: raw.message_id,
-    conversationId: raw.conversation_id,
-    text: raw.text,
-    createdAtMs: raw.created_at_ms,
-    messageSeq: raw.message_seq,
-    senderType: isBot ? "agent" : "user",
-    // For bots, identity is bot_id (stored in senderAccountId field for less UI churn).
-    senderAccountId: isBot ? botId : accountId,
-    senderMinosId: isBot
-      ? (s.name?.trim() || botId)
-      : (s.minos_id ?? "").trim(),
-    senderDisplayName: (s.display_name ?? "").trim(),
-    runtimeAgent: isBot
-      ? (s.runtime_agent?.trim() || undefined)
-      : undefined,
-    replyToMessageId: raw.reply_to?.message_id ?? null,
-    recalledAtMs: raw.recalled_at_ms ?? null,
-    mentionedAccountIds: Array.isArray(raw.mentioned_account_ids)
-      ? raw.mentioned_account_ids.filter(
-          (id): id is string => typeof id === "string" && id.length > 0,
-        )
-      : undefined,
-    mentionedAgentIds: Array.isArray(raw.mentioned_agent_ids)
-      ? raw.mentioned_agent_ids.filter(
-          (id): id is string => typeof id === "string" && id.length > 0,
-        )
-      : undefined,
-  };
-}
-
-/** Conversation topic T1 full message (open chat). */
-const CONVERSATION_APPEND_KINDS = new Set([
-  "conversation_message_appended",
-  "ConversationMessageAppended",
-]);
-
-const CONVERSATION_RECALL_KINDS = new Set([
-  "conversation_message_recalled",
-  "ConversationMessageRecalled",
-]);
-
-/** Account topic T2 thin digest (inbox/rail only). */
-const ACCOUNT_APPEND_KINDS = new Set([
-  "account_conversation_message_appended",
-  "AccountConversationMessageAppended",
-]);
-
-const ACCOUNT_RECALL_KINDS = new Set([
-  "account_conversation_message_recalled",
-  "AccountConversationMessageRecalled",
-]);
-
-const REACTION_KINDS = new Set([
-  "conversation_message_reaction_updated",
-  "ConversationMessageReactionUpdated",
-]);
-
-function mapAccountDigest(
-  payload: DurableMessagePayload,
-  isRecall: boolean,
-): CloudInboxDigest | null {
-  const conversationId = payload.conversation_id?.trim();
-  const messageId = payload.message_id?.trim();
-  if (!conversationId || !messageId) return null;
-  const sender = payload.sender;
-  const senderAccountId =
-    sender?.account_id?.trim() || sender?.agent_id?.trim() || "";
-  const preview = isRecall
-    ? (payload.preview?.trim() || "Message recalled")
-    : (payload.preview?.trim() ?? "");
-  // 0 = omit activity bump (never invent client Date.now()).
-  const atMs =
-    typeof payload.at_ms === "number" &&
-    Number.isFinite(payload.at_ms) &&
-    payload.at_ms > 0
-      ? payload.at_ms
-      : 0;
-  return {
-    conversationId,
-    messageId,
-    preview,
-    atMs,
-    senderAccountId,
-    senderDisplayName: payload.sender_display_name?.trim() || "",
-    mentioned: Boolean(payload.mentioned),
-    messageSeq:
-      typeof payload.message_seq === "number" ? payload.message_seq : undefined,
-    isRecall,
-  };
-}
-
 export class CloudRealtimeSession {
   private ws: WebSocket | null = null;
   private stopped = false;
+  /** Bumped on each start/force/stop/connect so stale ticket callbacks cannot own state. */
+  private connectionEpoch = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempt = 0;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
@@ -445,6 +308,7 @@ export class CloudRealtimeSession {
 
   start(deviceId: string, accessToken: string, accountId?: string): void {
     this.stopped = false;
+    this.connectionEpoch += 1;
     this.auth = {
       deviceId,
       accessToken,
@@ -471,6 +335,7 @@ export class CloudRealtimeSession {
     this.clearTimers();
     this.reconnectAttempt = 0;
     this.pendingSubscribeTopics.clear();
+    this.connectionEpoch += 1;
     if (this.ws) {
       try {
         // Detach onclose so we do not schedule the backoff path.
@@ -505,11 +370,15 @@ export class CloudRealtimeSession {
 
   stop(): void {
     this.stopped = true;
+    this.connectionEpoch += 1;
     this.clearTimers();
     this.conversationIds.clear();
     this.pendingSubscribeTopics.clear();
     if (this.ws) {
       try {
+        this.ws.onclose = null;
+        this.ws.onerror = null;
+        this.ws.onmessage = null;
         this.ws.close();
       } catch {
         /* ignore */
@@ -652,32 +521,66 @@ export class CloudRealtimeSession {
 
   private async connect(): Promise<void> {
     if (this.stopped || !this.auth) return;
+    // Each connect attempt owns an epoch; stale ticket / open / close must no-op.
+    const epoch = ++this.connectionEpoch;
+    // Close any prior socket without letting its onclose clear the new attempt.
+    if (this.ws) {
+      try {
+        this.ws.onclose = null;
+        this.ws.onerror = null;
+        this.ws.onmessage = null;
+        this.ws.close();
+      } catch {
+        /* ignore */
+      }
+      this.ws = null;
+    }
     this.setState("connecting");
     try {
-      const ticket = await createWsTicket(
-        this.auth.deviceId,
-        this.auth.accessToken,
-      );
-      if (this.stopped) return;
+      const auth = this.auth;
+      const ticket = await createWsTicket(auth.deviceId, auth.accessToken);
+      if (this.stopped || epoch !== this.connectionEpoch) return;
       const url = cloudClientWsUrl(ticket.gatewayUrl, ticket.ticket);
       const ws = new WebSocket(url);
+      if (this.stopped || epoch !== this.connectionEpoch) {
+        try {
+          ws.close();
+        } catch {
+          /* ignore */
+        }
+        return;
+      }
       this.ws = ws;
 
       ws.onopen = () => {
+        if (epoch !== this.connectionEpoch || this.ws !== ws) {
+          try {
+            ws.close();
+          } catch {
+            /* ignore */
+          }
+          return;
+        }
         this.reconnectAttempt = 0;
         // Wait for Hello before Subscribe; account is auto-subscribed by gateway.
         this.ensurePingTimer();
       };
 
       ws.onmessage = (ev) => {
+        if (epoch !== this.connectionEpoch || this.ws !== ws) return;
         this.handleRaw(String(ev.data ?? ""));
       };
 
       ws.onerror = () => {
+        if (epoch !== this.connectionEpoch || this.ws !== ws) return;
         this.setState("error");
       };
 
       ws.onclose = () => {
+        if (epoch !== this.connectionEpoch || this.ws !== ws) {
+          // Stale socket — do not clear current connection or schedule reconnect.
+          return;
+        }
         this.ws = null;
         this.clearTimers();
         this.pendingSubscribeTopics.clear();
@@ -685,6 +588,7 @@ export class CloudRealtimeSession {
         this.scheduleReconnect();
       };
     } catch (error) {
+      if (this.stopped || epoch !== this.connectionEpoch) return;
       console.warn("[cloud-realtime] connect failed", error);
       this.setState("error");
       this.scheduleReconnect();

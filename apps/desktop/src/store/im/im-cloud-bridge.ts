@@ -640,6 +640,8 @@ export async function appendMessageOnCloud(input: {
   conversationId: string;
   text: string;
   replyToMessageId?: string | null;
+  /** When set, refuse to send if the live bridge session is a different account. */
+  expectedAccountId?: string;
   mentions?: Array<
     | {
         kind: "bot";
@@ -666,6 +668,13 @@ export async function appendMessageOnCloud(input: {
   ensureImCloudBridge();
   if (!session) {
     return { ok: false, reason: "socket" };
+  }
+  const expected = input.expectedAccountId?.trim();
+  if (expected) {
+    const liveAccount = useAccountStore.getState().session?.accountId?.trim() ?? "";
+    if (!liveAccount || liveAccount !== expected) {
+      return { ok: false, reason: "socket" };
+    }
   }
   const result = await session.sendAppendMessage({
     clientOperationId: input.clientOperationId,

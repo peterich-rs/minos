@@ -20,11 +20,11 @@ use minos_protocol::{
     AppendConversationMessageParams, ApprovalDecisionRequest, CreateConversationParams,
     CreateProjectRequest, HostApplyLinkTokenParams, HostApplyLinkTokenResponse,
     HostClearCredentialResponse, HostPrepareLinkResponse, HostSignLinkProofParams,
-    HostSignLinkProofResponse, ListClisResponse,
-    ListConversationAgentSessionsParams, ListConversationMessagesParams, ListConversationsParams,
-    ListProjectsResponse, LocalConversationMessage, LocalConversationSummary, LocalReactionGroup,
-    ProjectSummary, ReadSessionParams, RemoveConversationAgentParams, SendUserMessageRequest,
-    SessionState, SessionSummary, StartAgentInConversationRequest, StartAgentResponse,
+    HostSignLinkProofResponse, ListClisResponse, ListConversationAgentSessionsParams,
+    ListConversationMessagesParams, ListConversationsParams, ListProjectsResponse,
+    LocalConversationMessage, LocalConversationSummary, LocalReactionGroup, ProjectSummary,
+    ReadSessionParams, RemoveConversationAgentParams, SendUserMessageRequest, SessionState,
+    SessionSummary, StartAgentInConversationRequest, StartAgentResponse,
     ToggleConversationMessageReactionParams, ToggleConversationMessageReactionResponse,
     UpdateConversationParams,
 };
@@ -428,6 +428,9 @@ struct BridgeInner {
     source: String,
     /// Keep alive for the app lifetime when we started local RPC ourselves.
     managed: Option<Arc<DaemonHandle>>,
+    /// True while stop is in progress — new connect must wait/refuse so we
+    /// never start a second daemon against a still-tearing-down handle.
+    teardown_in_progress: bool,
     /// Generation of the pumps currently running for this client.
     pumps_running_for: u64,
 }
@@ -441,6 +444,7 @@ impl DaemonBridge {
                 last_error: None,
                 source: "none".into(),
                 managed: None,
+                teardown_in_progress: false,
                 pumps_running_for: 0,
             }),
             connect_lock: Mutex::new(()),
@@ -466,6 +470,25 @@ impl DaemonBridge {
     pub async fn connect(&self, override_url: Option<String>) -> ConnectionDto {
         let _gate = self.connect_lock.lock().await;
         let explicit = override_url.is_some();
+
+        // Refuse concurrent start while managed stop still owns the handle.
+        {
+            let guard = self.inner.lock().await;
+            if guard.teardown_in_progress {
+                return ConnectionDto {
+                    connected: false,
+                    endpoint: None,
+                    error: Some("managed daemon is shutting down".into()),
+                    source: "error".into(),
+                    managed: guard.managed.is_some(),
+                    cloud_online: false,
+                    has_host_token: minos_daemon::device_secret_store::read()
+                        .ok()
+                        .flatten()
+                        .is_some(),
+                };
+            }
+        }
 
         // Already healthy? Reuse (and ensure push pumps are armed).
         {
@@ -698,13 +721,19 @@ impl DaemonBridge {
     /// After success the bridge owns neither a client nor a managed handle;
     /// a later [`Self::connect`] starts a fresh managed daemon (used by
     /// `restore_after_failed_update`).
+    ///
+    /// The managed handle stays owned until `stop` reaches a terminal state so
+    /// an outer timeout cannot drop the only reference mid-teardown. Concurrent
+    /// `connect` is refused while `teardown_in_progress`.
     pub async fn shutdown_managed(&self) -> Result<(), String> {
         // Drop the WS client first so subscription pumps exit promptly.
+        // Keep `managed` until stop finishes — clone Arc, clear only after.
         let managed = {
             let mut guard = self.inner.lock().await;
             guard.client = None;
             guard.endpoint = None;
-            guard.managed.take()
+            guard.teardown_in_progress = true;
+            guard.managed.clone()
         };
         // Invalidate discovery so a concurrent connect does not attach to a
         // port that is about to close (or already closed).
@@ -713,12 +742,15 @@ impl DaemonBridge {
         self.pump_generation.fetch_add(1, Ordering::SeqCst);
 
         if let Some(handle) = managed {
-            match handle.stop().await {
-                Ok(()) => {
+            // Detach stop onto a join handle so an outer timeout cancels only
+            // our await, not the stop future itself (providers still terminate).
+            let stop_task = tokio::spawn(async move { handle.stop().await });
+            let result = match stop_task.await {
+                Ok(Ok(())) => {
                     info!(target: "minos_desktop", "managed daemon stopped");
                     Ok(())
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     warn!(
                         target: "minos_desktop",
                         error = %e,
@@ -726,8 +758,22 @@ impl DaemonBridge {
                     );
                     Err(e.to_string())
                 }
-            }
+                Err(join_err) => {
+                    warn!(
+                        target: "minos_desktop",
+                        error = %join_err,
+                        "managed daemon stop task panicked"
+                    );
+                    Err(join_err.to_string())
+                }
+            };
+            let mut guard = self.inner.lock().await;
+            guard.managed = None;
+            guard.teardown_in_progress = false;
+            result
         } else {
+            let mut guard = self.inner.lock().await;
+            guard.teardown_in_progress = false;
             Ok(())
         }
     }

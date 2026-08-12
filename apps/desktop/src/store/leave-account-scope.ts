@@ -15,6 +15,7 @@ import { cloudDigestCache } from "@/shared/lib/cloud-digest-cache";
 import { clearAllTopicCursors } from "@/shared/lib/cloud-cursors";
 import { cancelCloudDigestHydrate } from "@/store/im/cloud-digest-ensure";
 import { daemonApi, isTauriRuntime } from "@/shared/lib/daemon";
+import { revokeHostCredential } from "@/features/host/lib/host-credential-controller";
 import { stopImCloudBridge } from "@/store/im/im-cloud-bridge";
 import {
   resetImCloudSyncState,
@@ -80,13 +81,15 @@ export function leaveAccountScope(
   // 4) Navigation selection is account-scoped (not reconnect-scoped).
   useUiStore.getState().clearAccountScopedUi();
 
-  // 5) Best-effort drop host hit_ so next account cannot inherit /ws/host.
-  // Fire-and-forget: leave must stay sync for store setState callers.
-  // Next login always force-registers when hostCredentialAccountId is null
-  // (account-store clears ownership on leave/sign-out/switch).
+  // 5) Drop host hit_ on the serial credential controller so in-flight
+  // register/apply for the previous account aborts and clear runs before any
+  // subsequent apply. Leave stays sync for setState callers.
   if (isTauriRuntime()) {
-    void daemonApi.hostClearCredential().catch(() => {
-      /* daemon may be offline; ensure path force-registers on next login */
+    revokeHostCredential(async () => {
+      await daemonApi.hostClearCredential();
     });
+  } else {
+    // Web / tests: still bump generation so deferred apply is rejected.
+    revokeHostCredential(async () => {});
   }
 }

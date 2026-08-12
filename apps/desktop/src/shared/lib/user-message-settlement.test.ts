@@ -7,8 +7,8 @@ describe("deliveryStatusAfterUserSettlement", () => {
     assert.equal(deliveryStatusAfterUserSettlement("acked"), "sent");
   });
 
-  it("timeout → sending (never false sent)", () => {
-    assert.equal(deliveryStatusAfterUserSettlement("timeout"), "sending");
+  it("timeout → failed (retry affordance; never false sent)", () => {
+    assert.equal(deliveryStatusAfterUserSettlement("timeout"), "failed");
   });
 
   it("failed_terminal → failed", () => {

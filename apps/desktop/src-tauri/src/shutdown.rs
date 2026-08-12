@@ -29,7 +29,13 @@ pub fn shutdown_managed_once(daemon: &Arc<DaemonBridge>, done: &AtomicBool) {
     // Block until stop finishes (or times out) — Exit is the last chance before
     // process teardown drops the runtime without group signals to provider children.
     tauri::async_runtime::block_on(async move {
-        match tokio::time::timeout(SHUTDOWN_TIMEOUT, daemon.shutdown_managed()).await {
+        // Prefer completing stop; only race a wall-clock budget so Cmd+Q cannot
+        // hang forever. `shutdown_managed` detaches stop onto a join task and
+        // keeps the managed handle until that task finishes, so a timeout here
+        // must still wait for the in-flight stop (providers terminate inside).
+        let stop = daemon.shutdown_managed();
+        tokio::pin!(stop);
+        match tokio::time::timeout(SHUTDOWN_TIMEOUT, &mut stop).await {
             Ok(Ok(())) => {
                 info!("desktop host managed daemon shutdown complete");
             }
@@ -42,8 +48,16 @@ pub fn shutdown_managed_once(daemon: &Arc<DaemonBridge>, done: &AtomicBool) {
             Err(_) => {
                 warn!(
                     timeout_secs = SHUTDOWN_TIMEOUT.as_secs(),
-                    "managed daemon shutdown timed out; continuing process exit"
+                    "managed daemon shutdown exceeded budget; awaiting terminal stop"
                 );
+                // Do not drop the stop future — finish provider terminate first.
+                match stop.await {
+                    Ok(()) => info!("desktop host managed daemon shutdown complete after budget"),
+                    Err(e) => warn!(
+                        error = %e,
+                        "managed daemon shutdown failed after budget"
+                    ),
+                }
             }
         }
     });

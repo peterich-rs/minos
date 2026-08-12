@@ -634,11 +634,10 @@ export function createUseCasesActions(
         (get().messagesByConversation[conversationId] ?? []).find(
           (m) => m.id === resolvedId,
         )?.deliveryStatus === "sending";
-      // Timeout keeps `sending` (outbox still pending). Terminal / other
-      // failures mark failed. Never false-sent.
-      const isTimeout =
-        /timeout|timed out|pending delivery/i.test(message);
-      if (stillSending && !isTimeout) {
+      // Timeout, terminal, or any other failure: surface failed so the user
+      // can retry (WeChat-style). Never leave a permanent spinner; never
+      // false-sent. Background outbox may still ack later and upgrade to sent.
+      if (stillSending) {
         patchMessageDelivery(
           conversationId,
           resolvedId,
@@ -704,9 +703,7 @@ export function createUseCasesActions(
         (get().messagesByConversation[conversationId] ?? []).find(
           (m) => m.id === messageId,
         )?.deliveryStatus === "sending";
-      const isTimeout =
-        /timeout|timed out|pending delivery/i.test(message);
-      if (stillSending && !isTimeout) {
+      if (stillSending) {
         patchMessageDelivery(
           conversationId,
           messageId,

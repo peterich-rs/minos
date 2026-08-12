@@ -41,6 +41,8 @@ const BASE_BACKOFF_MS = 1_500;
 const MAX_BACKOFF_MS = 5 * 60_000;
 /** Inflight rows older than this are reclaimed to pending (kill mid-flight). */
 export const STALE_INFLIGHT_MS = 45_000;
+/** Max unacked intents (pending+inflight+failed_terminal). Matches Tauri store. */
+export const MAX_OUTBOX_ENTRIES = 2_000;
 
 export type OutboxStatus =
   | "pending"
@@ -224,8 +226,20 @@ function memoryBackend(seed: ImOutboxEntry[] = []): OutboxBackend {
     },
     async upsert(entry) {
       const idx = rows.findIndex((e) => e.clientMessageId === entry.clientMessageId);
-      if (idx >= 0) rows[idx] = entry;
-      else rows.push(entry);
+      if (idx >= 0) {
+        rows[idx] = entry;
+        return;
+      }
+      // Capacity before insert — failed enqueue must leave no durable/memory row.
+      if (entry.status !== "acked") {
+        const unacked = rows.filter((e) => e.status !== "acked").length;
+        if (unacked >= MAX_OUTBOX_ENTRIES) {
+          throw new Error(
+            `im_outbox_capacity: ${unacked} unacked intents already at max ${MAX_OUTBOX_ENTRIES}`,
+          );
+        }
+      }
+      rows.push(entry);
     },
   };
 }
@@ -465,8 +479,8 @@ async function upsertPendingEntry(input: {
         updatedAtMs: t,
         lastError: null,
       };
-      entries[existingIdx] = next;
       await persistEntry(next);
+      entries[existingIdx] = next;
       return next;
     }
 
@@ -494,8 +508,16 @@ async function upsertPendingEntry(input: {
       createdAtMs: t,
       updatedAtMs: t,
     };
-    entries.push(entry);
+    // Pre-check so capacity failures never leave a memory-only row.
+    const unacked = entries.filter((e) => e.status !== "acked").length;
+    if (unacked >= MAX_OUTBOX_ENTRIES) {
+      throw new Error(
+        `im_outbox_capacity: ${unacked} unacked intents already at max ${MAX_OUTBOX_ENTRIES}`,
+      );
+    }
+    // Persist first; only then mirror into memory (fail-closed).
     await persistEntry(entry);
+    entries.push(entry);
     return entry;
   });
 }

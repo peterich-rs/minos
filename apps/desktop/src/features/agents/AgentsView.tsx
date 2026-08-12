@@ -15,7 +15,6 @@ import {
   Plus,
   RefreshCw,
   Trash2,
-  X,
 } from "lucide-react";
 import type { AgentRuntime } from "@/shared/domain/collaboration";
 import { agentMeta } from "@/shared/lib/mock-data";
@@ -45,7 +44,14 @@ import {
   type ModelCatalogEntry,
   type RuntimeCliDescriptor,
 } from "./lib/agentConfigProjection";
-import { MODAL_BACKDROP_CLASS } from "@/shared/ui/modalBackdrop";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/shared/ui/dialog";
 import {
   PageHeader,
   PageHeaderPrimaryButton,
@@ -134,6 +140,8 @@ export function AgentsView() {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [editBot, setEditBot] = useState<BotRow | null>(null);
+  const [deleteBot, setDeleteBot] = useState<BotRow | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const bots = useMemo((): BotRow[] => {
@@ -435,41 +443,7 @@ export function AgentsView() {
                         <button
                           type="button"
                           title="Delete bot"
-                          onClick={() => {
-                            void (async () => {
-                              try {
-                                if (bot.source === "hub") {
-                                  const token = accessToken?.trim();
-                                  if (!token) {
-                                    throw new Error("Sign in required to delete Hub bots");
-                                  }
-                                  await deleteCloudAgent(deviceId, token, bot.id);
-                                  // Best-effort: drop matching daemon cache by name.
-                                  if (isTauriRuntime()) {
-                                    const match = daemonProfiles.find(
-                                      (p) =>
-                                        p.name.trim().toLowerCase() ===
-                                        bot.name.trim().toLowerCase(),
-                                    );
-                                    if (match) {
-                                      try {
-                                        await daemonApi.deleteAgentProfile(match.id);
-                                      } catch {
-                                        /* cache cleanup optional */
-                                      }
-                                    }
-                                  }
-                                } else {
-                                  await daemonApi.deleteAgentProfile(bot.id);
-                                }
-                                await loadBots();
-                              } catch (e) {
-                                setError(
-                                  e instanceof Error ? e.message : String(e),
-                                );
-                              }
-                            })();
-                          }}
+                          onClick={() => setDeleteBot(bot)}
                           className="rounded-lg p-1.5 text-ink-muted hover:bg-status-failed/10 hover:text-status-failed"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
@@ -548,6 +522,82 @@ export function AgentsView() {
           }}
         />
       ) : null}
+
+      <Dialog
+        open={deleteBot != null}
+        onOpenChange={(open) => {
+          if (!open && !deleting) setDeleteBot(null);
+        }}
+      >
+        <DialogContent className="max-w-md sm:rounded-2xl">
+          <DialogHeader>
+            <DialogTitle>Delete bot?</DialogTitle>
+            <DialogDescription>
+              {deleteBot
+                ? deleteBot.source === "hub"
+                  ? `Permanently delete “${deleteBot.displayName || deleteBot.name}” from Hub. This cannot be undone.`
+                  : `Delete local profile “${deleteBot.displayName || deleteBot.name}”. This cannot be undone.`
+                : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <button
+              type="button"
+              disabled={deleting}
+              onClick={() => setDeleteBot(null)}
+              className="rounded-xl border border-ink/10 bg-surface-raised px-3.5 py-2 text-xs font-medium text-ink-muted hover:bg-surface disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={deleting || !deleteBot}
+              onClick={() => {
+                const bot = deleteBot;
+                if (!bot || deleting) return;
+                void (async () => {
+                  setDeleting(true);
+                  setError(null);
+                  try {
+                    if (bot.source === "hub") {
+                      const token = accessToken?.trim();
+                      if (!token) {
+                        throw new Error("Sign in required to delete Hub bots");
+                      }
+                      await deleteCloudAgent(deviceId, token, bot.id);
+                      if (isTauriRuntime()) {
+                        const match = daemonProfiles.find(
+                          (p) =>
+                            p.name.trim().toLowerCase() ===
+                            bot.name.trim().toLowerCase(),
+                        );
+                        if (match) {
+                          try {
+                            await daemonApi.deleteAgentProfile(match.id);
+                          } catch {
+                            /* cache cleanup optional */
+                          }
+                        }
+                      }
+                    } else {
+                      await daemonApi.deleteAgentProfile(bot.id);
+                    }
+                    setDeleteBot(null);
+                    await loadBots();
+                  } catch (e) {
+                    setError(e instanceof Error ? e.message : String(e));
+                  } finally {
+                    setDeleting(false);
+                  }
+                })();
+              }}
+              className="rounded-xl bg-status-failed px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-status-failed/90 disabled:opacity-50"
+            >
+              {deleting ? "Deleting…" : "Delete"}
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -708,38 +758,21 @@ function CreateAgentDialog({
   };
 
   return (
-    <div
-      className={cn(
-        "fixed inset-0 z-50 flex items-center justify-center p-4",
-        MODAL_BACKDROP_CLASS,
-      )}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Create agent"
-      onPointerDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div className="flex max-h-[min(92vh,760px)] w-full max-w-[440px] flex-col overflow-hidden rounded-2xl border border-ink/8 bg-surface shadow-2xl">
-        <header className="flex shrink-0 items-center justify-between px-5 pb-3 pt-5">
-          <div>
-            <h2 className="text-base font-semibold tracking-tight text-ink">
-              Create agent
-            </h2>
-            <p className="mt-0.5 text-xs text-ink-muted">
-              {cloudOnline
-                ? "Creates a global Hub bot (identity SSOT). Digital body is shared across conversations."
-                : "Offline: Host profile cache only. Sign in to create a Hub bot."}
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-xl p-2 text-ink-muted hover:bg-surface-raised/80 hover:text-ink"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </header>
+    <Dialog open onOpenChange={(open) => !open && !saving && onClose()}>
+      <DialogContent
+        className="flex max-h-[min(92vh,760px)] w-full max-w-[440px] flex-col gap-0 overflow-hidden p-0 sm:rounded-2xl"
+        aria-describedby={undefined}
+      >
+        <DialogHeader className="shrink-0 space-y-1 px-5 pb-3 pt-5 text-left">
+          <DialogTitle className="text-base font-semibold tracking-tight text-ink">
+            Create agent
+          </DialogTitle>
+          <DialogDescription className="text-xs text-ink-muted">
+            {cloudOnline
+              ? "Creates a global Hub bot (identity SSOT). Digital body is shared across conversations."
+              : "Offline: Host profile cache only. Sign in to create a Hub bot."}
+          </DialogDescription>
+        </DialogHeader>
 
         <div className="scrollbar-thin min-h-0 flex-1 space-y-5 overflow-y-auto px-5 pb-2">
           <Field label="Name" required>
@@ -917,11 +950,12 @@ function CreateAgentDialog({
           {err ? <p className="text-xs text-rose-600">{err}</p> : null}
         </div>
 
-        <footer className="flex shrink-0 justify-end gap-2 border-t border-ink/5 bg-surface-muted/60 px-5 py-3.5">
+        <DialogFooter className="shrink-0 gap-2 border-t border-ink/5 bg-surface-muted/60 px-5 py-3.5 sm:justify-end">
           <button
             type="button"
             onClick={onClose}
-            className="rounded-xl border border-ink/10 bg-surface-raised px-3.5 py-2 text-xs font-medium text-ink-muted hover:bg-surface"
+            disabled={saving}
+            className="rounded-xl border border-ink/10 bg-surface-raised px-3.5 py-2 text-xs font-medium text-ink-muted hover:bg-surface disabled:opacity-50"
           >
             Cancel
           </button>
@@ -933,9 +967,9 @@ function CreateAgentDialog({
           >
             {saving ? "Creating…" : "Create agent"}
           </button>
-        </footer>
-      </div>
-    </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -1047,38 +1081,21 @@ function EditAgentDialog({
   };
 
   return (
-    <div
-      className={cn(
-        "fixed inset-0 z-50 flex items-center justify-center p-4",
-        MODAL_BACKDROP_CLASS,
-      )}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Edit agent"
-      onPointerDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div className="flex max-h-[min(92vh,640px)] w-full max-w-[440px] flex-col overflow-hidden rounded-2xl border border-ink/8 bg-surface shadow-2xl">
-        <header className="flex shrink-0 items-center justify-between px-5 pb-3 pt-5">
-          <div>
-            <h2 className="text-base font-semibold tracking-tight text-ink">
-              Edit digital body
-            </h2>
-            <p className="mt-0.5 text-xs text-ink-muted">
-              {bot.source === "hub"
-                ? "Updates Hub bot identity (system_prompt / default_reasoning_effort)."
-                : "Updates local Host cache only."}
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-xl p-2 text-ink-muted hover:bg-surface-raised/80 hover:text-ink"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </header>
+    <Dialog open onOpenChange={(open) => !open && !saving && onClose()}>
+      <DialogContent
+        className="flex max-h-[min(92vh,640px)] w-full max-w-[440px] flex-col gap-0 overflow-hidden p-0 sm:rounded-2xl"
+        aria-describedby={undefined}
+      >
+        <DialogHeader className="shrink-0 space-y-1 px-5 pb-3 pt-5 text-left">
+          <DialogTitle className="text-base font-semibold tracking-tight text-ink">
+            Edit digital body
+          </DialogTitle>
+          <DialogDescription className="text-xs text-ink-muted">
+            {bot.source === "hub"
+              ? "Updates Hub bot identity (system_prompt / default_reasoning_effort)."
+              : "Updates local Host cache only."}
+          </DialogDescription>
+        </DialogHeader>
 
         <div className="scrollbar-thin min-h-0 flex-1 space-y-5 overflow-y-auto px-5 pb-2">
           <Field label="Name" required>
@@ -1139,11 +1156,12 @@ function EditAgentDialog({
           {err ? <p className="text-xs text-rose-600">{err}</p> : null}
         </div>
 
-        <footer className="flex shrink-0 justify-end gap-2 border-t border-ink/5 bg-surface-muted/60 px-5 py-3.5">
+        <DialogFooter className="shrink-0 gap-2 border-t border-ink/5 bg-surface-muted/60 px-5 py-3.5 sm:justify-end">
           <button
             type="button"
             onClick={onClose}
-            className="rounded-xl border border-ink/10 bg-surface-raised px-3.5 py-2 text-xs font-medium text-ink-muted hover:bg-surface"
+            disabled={saving}
+            className="rounded-xl border border-ink/10 bg-surface-raised px-3.5 py-2 text-xs font-medium text-ink-muted hover:bg-surface disabled:opacity-50"
           >
             Cancel
           </button>
@@ -1155,9 +1173,9 @@ function EditAgentDialog({
           >
             {saving ? "Saving…" : "Save"}
           </button>
-        </footer>
-      </div>
-    </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

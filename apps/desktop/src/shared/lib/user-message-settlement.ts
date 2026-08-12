@@ -1,11 +1,13 @@
 /**
  * Map outbox settlement → UI delivery for user bubbles.
- * Only `acked` may become `sent`; timeout keeps `sending` (still pending).
+ *
+ * Only `acked` may become `sent`. Timeout and terminal failure both surface as
+ * `failed` so the user sees a retry affordance (WeChat-style red `!`), even when
+ * the durable outbox may still retry in the background.
  */
 export function deliveryStatusAfterUserSettlement(
   settlement: "acked" | "failed_terminal" | "timeout",
-): "sent" | "sending" | "failed" {
+): "sent" | "failed" {
   if (settlement === "acked") return "sent";
-  if (settlement === "failed_terminal") return "failed";
-  return "sending";
+  return "failed";
 }
