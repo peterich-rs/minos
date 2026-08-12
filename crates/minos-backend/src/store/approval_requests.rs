@@ -336,12 +336,11 @@ pub async fn timeout_pending_with_null_host(
     limit: u32,
 ) -> Result<u64, BackendError> {
     let resolution = serde_json::json!({ "reason": "timeout", "orphan": "null_host" });
-    let resolution_json = serde_json::to_string(&resolution).map_err(|error| {
-        BackendError::StoreDecode {
+    let resolution_json =
+        serde_json::to_string(&resolution).map_err(|error| BackendError::StoreDecode {
             column: "approval_requests.resolution_json".into(),
             message: error.to_string(),
-        }
-    })?;
+        })?;
     let result = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => sqlx::query(
             "UPDATE approval_requests
@@ -395,7 +394,9 @@ pub async fn timeout_pending_with_null_host(
         .await
         .map(|r| r.rows_affected()),
     }
-    .map_err(store_err("approval_requests::timeout_pending_with_null_host"))?;
+    .map_err(store_err(
+        "approval_requests::timeout_pending_with_null_host",
+    ))?;
     Ok(result)
 }
 

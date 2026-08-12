@@ -119,10 +119,7 @@ async fn process_row(
         Ok(crate::notifications::AccountDispatchOutcome::Transient { reason }) => {
             // Presence / quiet-hours / cooldown are deferrals, not provider
             // failures — do not burn attempt budget toward dead-letter.
-            let deferral = matches!(
-                reason.as_str(),
-                "user_online" | "quiet_hours" | "cooldown"
-            );
+            let deferral = matches!(reason.as_str(), "user_online" | "quiet_hours" | "cooldown");
             let attempts_for_budget = if deferral {
                 row.attempts.saturating_sub(1)
             } else {

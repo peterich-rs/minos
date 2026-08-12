@@ -125,12 +125,9 @@ impl DefaultApprovalService {
             ),
         }
 
-        let rows = store::approval_requests::list_expired_pending(
-            &self.store,
-            now_ms,
-            EXPIRED_BATCH_SIZE,
-        )
-        .await?;
+        let rows =
+            store::approval_requests::list_expired_pending(&self.store, now_ms, EXPIRED_BATCH_SIZE)
+                .await?;
 
         for row in rows {
             self.resolve_automatically(row, ApprovalRequestState::Timeout)

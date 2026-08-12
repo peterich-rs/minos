@@ -5862,10 +5862,7 @@ async fn ensure_hub_collaboration_conversation(
             project_id
         }
     } else {
-        let project_id = format!(
-            "project-hub-{}",
-            short_prefix(conversation_id, 8)
-        );
+        let project_id = format!("project-hub-{}", short_prefix(conversation_id, 8));
         store
             .ensure_project(&project_id, "Hub", "hub", None, now_ms)
             .await?;

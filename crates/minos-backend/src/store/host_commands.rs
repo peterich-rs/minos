@@ -610,7 +610,9 @@ mod tests {
         )
         .await
         .unwrap());
-        assert!(ack(&pool, "cmd-finish-before-ack", host, T0 + 100).await.unwrap());
+        assert!(ack(&pool, "cmd-finish-before-ack", host, T0 + 100)
+            .await
+            .unwrap());
 
         let row = get(&pool, "cmd-finish-before-ack").await.unwrap().unwrap();
         assert_eq!(row.status, HostCommandStatus::Succeeded);
@@ -721,5 +723,4 @@ mod tests {
         .await
         .unwrap());
     }
-
 }

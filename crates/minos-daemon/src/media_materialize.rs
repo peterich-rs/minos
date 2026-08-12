@@ -210,7 +210,11 @@ fn safe_filename(att: &DispatchAttachment, idx: usize) -> String {
         "text/plain" => "txt",
         _ => "bin",
     };
-    let blob = att.blob_id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect::<String>();
+    let blob = att
+        .blob_id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .collect::<String>();
     let stem = if blob.is_empty() {
         "blob".to_string()
     } else {
@@ -250,9 +254,7 @@ async fn download_one(client: &reqwest::Client, url: &str, dest: &Path) -> Resul
         if written > MAX_ATTACHMENT_BYTES {
             drop(file);
             let _ = tokio::fs::remove_file(dest).await;
-            return Err(format!(
-                "body exceeded cap {MAX_ATTACHMENT_BYTES} bytes"
-            ));
+            return Err(format!("body exceeded cap {MAX_ATTACHMENT_BYTES} bytes"));
         }
         file.write_all(&chunk)
             .await
@@ -267,13 +269,10 @@ fn resolve_download_url(url: &str) -> Result<url::Url, String> {
         return url::Url::parse(url).map_err(|e| format!("parse url: {e}"));
     }
     // Relative paths need an absolute backend origin (host is not the API).
-    let base = configured_http_bases()
-        .into_iter()
-        .next()
-        .ok_or_else(|| {
-            "relative download_url requires MINOS_BACKEND_URL or MINOS_MEDIA_PUBLIC_BASE_URL on host"
-                .to_string()
-        })?;
+    let base = configured_http_bases().into_iter().next().ok_or_else(|| {
+        "relative download_url requires MINOS_BACKEND_URL or MINOS_MEDIA_PUBLIC_BASE_URL on host"
+            .to_string()
+    })?;
     base.join(url).map_err(|e| format!("join url: {e}"))
 }
 
@@ -456,7 +455,10 @@ mod tests {
             hashed.is_dir(),
             "expected hashed origin dir under attachments, got {:?}",
             std::fs::read_dir(&attachments)
-                .map(|d| d.filter_map(|e| e.ok()).map(|e| e.path()).collect::<Vec<_>>())
+                .map(|d| d
+                    .filter_map(|e| e.ok())
+                    .map(|e| e.path())
+                    .collect::<Vec<_>>())
                 .unwrap_or_default()
         );
         // No sibling escape dirs created next to .minos

@@ -276,7 +276,6 @@ fn apply_durable_event(
     }
 }
 
-
 async fn surface_snapshot_required(
     topic: &str,
     last_known_seq: i64,
@@ -375,25 +374,22 @@ async fn dispatch_event(
                             topic_seq,
                             "skip AdvanceNow while topic has pending Dart hold"
                         );
-                    } else {
-                        match subscription_mgr.update_seq(topic, *topic_seq).await {
-                            crate::realtime::subscription::CursorAdvance::Hole { expected } => {
-                                tracing::warn!(
-                                    topic,
-                                    topic_seq,
-                                    expected,
-                                    "durable seq hole on AdvanceNow; requesting snapshot"
-                                );
-                                surface_snapshot_required(
-                                    topic,
-                                    expected - 1,
-                                    ui_events_tx,
-                                    subscription_mgr,
-                                )
-                                .await;
-                            }
-                            _ => {}
-                        }
+                    } else if let crate::realtime::subscription::CursorAdvance::Hole { expected } =
+                        subscription_mgr.update_seq(topic, *topic_seq).await
+                    {
+                        tracing::warn!(
+                            topic,
+                            topic_seq,
+                            expected,
+                            "durable seq hole on AdvanceNow; requesting snapshot"
+                        );
+                        surface_snapshot_required(
+                            topic,
+                            expected - 1,
+                            ui_events_tx,
+                            subscription_mgr,
+                        )
+                        .await;
                     }
                 }
                 ApplyOutcome::AwaitDartAck => {

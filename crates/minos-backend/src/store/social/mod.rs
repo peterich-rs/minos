@@ -845,13 +845,7 @@ mod tests {
         let conversation = create_group_conversation(&pool, &alice, "Sec", &[], T0)
             .await
             .unwrap();
-        for bad in [
-            "../etc/passwd",
-            "/tmp/x",
-            "foo/bar",
-            "has space",
-            "..",
-        ] {
+        for bad in ["../etc/passwd", "/tmp/x", "foo/bar", "has space", ".."] {
             let err = insert_message_with_id(
                 &pool,
                 &conversation.conversation_id,

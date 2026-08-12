@@ -1163,7 +1163,9 @@ mod tests {
         assert_eq!(row.status, OutboxStatus::Claimed);
         assert_eq!(row.ack_at_ms, None);
 
-        assert!(host_commands::ack(&pool, "cmd-1", host_id, T0 + 2).await.unwrap());
+        assert!(host_commands::ack(&pool, "cmd-1", host_id, T0 + 2)
+            .await
+            .unwrap());
         assert!(ack(&pool, "out-host-command", T0 + 3).await.unwrap());
 
         let row = get(&pool, "out-host-command").await.unwrap().unwrap();
@@ -1374,9 +1376,11 @@ mod tests {
                 .len(),
             1
         );
-        assert!(host_commands::ack(&pool, "cmd-obs-past-deadline", host_id, T0 + 5)
-            .await
-            .unwrap());
+        assert!(
+            host_commands::ack(&pool, "cmd-obs-past-deadline", host_id, T0 + 5)
+                .await
+                .unwrap()
+        );
         let cmd = host_commands::get(&pool, "cmd-obs-past-deadline")
             .await
             .unwrap()

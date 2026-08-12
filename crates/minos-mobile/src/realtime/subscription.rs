@@ -21,7 +21,9 @@ pub enum CursorAdvance {
     Advanced,
     Unchanged,
     /// `topic_seq` skipped past `cursor + 1` — caller must request snapshot.
-    Hole { expected: i64 },
+    Hole {
+        expected: i64,
+    },
 }
 
 #[derive(Debug, Default)]

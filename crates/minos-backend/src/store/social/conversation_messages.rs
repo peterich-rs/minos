@@ -707,7 +707,6 @@ async fn insert_mention_rows_postgres(
     Ok(())
 }
 
-
 /// Fail-closed validation for untrusted `client_message_id` values.
 ///
 /// Clients mint UUIDs / `msg_<uuid>` / `react-…` keys; host projection uses
@@ -1138,7 +1137,9 @@ mod tests {
         assert!(validate_client_message_id("msg_550e8400-e29b-41d4-a716-446655440000").is_ok());
         assert!(validate_client_message_id("msg-disabled-sole-1").is_ok());
         assert!(validate_client_message_id("react-171000-42").is_ok());
-        assert!(validate_client_message_id("approval-550e8400-e29b-41d4-a716-446655440000").is_ok());
+        assert!(
+            validate_client_message_id("approval-550e8400-e29b-41d4-a716-446655440000").is_ok()
+        );
     }
 
     #[test]

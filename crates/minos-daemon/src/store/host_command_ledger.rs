@@ -234,13 +234,7 @@ mod tests {
             HostCommandBegin::InFlight
         );
         store
-            .complete_host_command(
-                "cmd-1",
-                true,
-                Some(r#"{"ok":true}"#),
-                None,
-                now + 2,
-            )
+            .complete_host_command("cmd-1", true, Some(r#"{"ok":true}"#), None, now + 2)
             .await
             .unwrap();
         match store.begin_host_command("cmd-1", now + 3).await.unwrap() {

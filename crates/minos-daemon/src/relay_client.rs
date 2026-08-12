@@ -1126,7 +1126,7 @@ async fn route_server_frame(frame: ServerFrame, ctx: &DispatchCtx) {
             let self_device_id = ctx.self_device_id;
             tokio::spawn(async move {
                 // Reconstruct a minimal ctx-like bundle via a dedicated helper.
-                handle_bot_inbox_delivery_spawned(
+                Box::pin(handle_bot_inbox_delivery_spawned(
                     store,
                     out_tx,
                     rpc_server,
@@ -1137,7 +1137,7 @@ async fn route_server_frame(frame: ServerFrame, ctx: &DispatchCtx) {
                     bot,
                     session,
                     lease_expires_at_ms,
-                )
+                ))
                 .await;
             });
         }
@@ -1260,7 +1260,13 @@ async fn route_durable_event(kind: &str, payload: &Value, ctx: &DispatchCtx) {
             let ack = build_host_command_ack(&command_id, chrono::Utc::now().timestamp_millis());
             let _ = ctx.out_tx.send(ack).await;
 
-            match remember_host_command_start(&ctx.host_command_cache, ctx.store.as_ref(), &command_id).await {
+            match remember_host_command_start(
+                &ctx.host_command_cache,
+                ctx.store.as_ref(),
+                &command_id,
+            )
+            .await
+            {
                 HostCommandRouteAction::Start => {}
                 HostCommandRouteAction::InFlight => return,
                 HostCommandRouteAction::Replay(snapshot) => {

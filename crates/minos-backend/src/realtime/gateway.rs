@@ -800,9 +800,7 @@ async fn handle_formal_frame(
                 if let Err(error) = crate::store::agent_dispatch_queue::renew_leases_for_host(
                     &state.store,
                     &upgrade.device_id.to_string(),
-                    now_ms.saturating_add(
-                        crate::store::agent_dispatch_queue::DEFAULT_LEASE_TTL_MS,
-                    ),
+                    now_ms.saturating_add(crate::store::agent_dispatch_queue::DEFAULT_LEASE_TTL_MS),
                     now_ms,
                 )
                 .await
@@ -839,7 +837,8 @@ async fn handle_formal_frame(
                 .await;
                 return Ok(None);
             }
-            match host_commands::ack(&state.store, &command_id, upgrade.device_id, ack_at_ms).await {
+            match host_commands::ack(&state.store, &command_id, upgrade.device_id, ack_at_ms).await
+            {
                 Ok(_) => {
                     if let Err(error) = outbox_events::ack_pending_host_command_events(
                         &state.store,

@@ -455,17 +455,16 @@ impl MobileClient {
             return;
         }
         self.subscription_mgr.clear_pending_hold(topic).await;
-        match self.subscription_mgr.update_seq(topic, topic_seq).await {
-            crate::realtime::subscription::CursorAdvance::Hole { expected } => {
-                tracing::warn!(
-                    topic,
-                    topic_seq,
-                    expected,
-                    "ack_durable_applied saw seq hole; clearing cursor for snapshot"
-                );
-                self.subscription_mgr.clear_cursor(topic).await;
-            }
-            _ => {}
+        if let crate::realtime::subscription::CursorAdvance::Hole { expected } =
+            self.subscription_mgr.update_seq(topic, topic_seq).await
+        {
+            tracing::warn!(
+                topic,
+                topic_seq,
+                expected,
+                "ack_durable_applied saw seq hole; clearing cursor for snapshot"
+            );
+            self.subscription_mgr.clear_cursor(topic).await;
         }
     }
 
