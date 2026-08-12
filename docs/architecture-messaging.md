@@ -428,6 +428,13 @@ Minos 明确区分 **可靠性语义不同** 的消息平面——这是成熟�
   - 客户端用 `resume_after: { topic → last_topic_seq }` 续传；`after < retention_floor`（含空日志）→ `SnapshotRequired`
   - cursor **仅在 apply/commit 成功后**推进（Mobile/Desktop）
 
+**投递契约（fail-closed / 有序）**：
+
+1. **Server ordered no-drop**：outbox claim 按 `(topic, topic_seq)` 排序；同批串行 dispatch。durable `try_send` / catch-up barrier 溢出时 **revoke 连接**（`Backpressure`），禁止丢帧后仍当作已投递。出站失败后客户端以 cursor 重连回放 `durable_event_log`；outbox 可在 bus publish 成功后 ack（权威在日志，不在单次 fanout）。
+2. **Client hole detection**：若已有正 cursor 且收到 `topic_seq > cursor + 1`，**不得**静默 `max` 推进；清 cursor 并走 `SnapshotRequired` / REST 重建。cursor=0（含 snapshot 后）允许落到高 seq。
+3. **Mobile hold 不越过**：`AwaitDartAck` 期间同 topic 禁止 `AdvanceNow`（含未识别 kind）；`ack_durable_applied` 串行化，避免并发 ack 乱序。
+4. **单调 outbox_id**：完整 ULID/雪花迁移若未落地，不得依赖 UUID 字典序保证全局序；以 `(topic, topic_seq)` claim 序为准。
+
 **典型事件**：
 
 - 社交：`ConversationMessageAppended` / `Recalled`、`AccountConversationMessage*`

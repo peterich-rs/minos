@@ -221,12 +221,15 @@ async fn claim_available_sqlite(
         .map_err(store_err("outbox_events::claim_available.begin_sqlite"))?;
 
     let candidate_ids = sqlx::query_scalar::<_, String>(
-        "SELECT outbox_id
-           FROM outbox_events
-          WHERE status = 'pending'
-            AND lane = ?
-            AND available_at_ms <= ?
-          ORDER BY available_at_ms ASC, outbox_id ASC
+        "SELECT o.outbox_id
+           FROM outbox_events o
+           JOIN durable_event_log d
+             ON d.topic_kind = o.topic_kind
+            AND d.event_id = o.event_id
+          WHERE o.status = 'pending'
+            AND o.lane = ?
+            AND o.available_at_ms <= ?
+          ORDER BY d.topic ASC, d.topic_seq ASC, o.available_at_ms ASC, o.outbox_id ASC
           LIMIT ?",
     )
     .bind(lane.as_str())
@@ -285,14 +288,17 @@ async fn claim_available_postgres(
 ) -> Result<Vec<OutboxEventRow>, BackendError> {
     let rows = sqlx::query_as::<_, OutboxEventRowTuple>(
         "WITH cte AS (
-             SELECT outbox_id
-               FROM outbox_events
-              WHERE status = 'pending'
-                AND lane = $4
-                AND available_at_ms <= $1
-              ORDER BY available_at_ms ASC, outbox_id ASC
+             SELECT o.outbox_id
+               FROM outbox_events o
+               JOIN durable_event_log d
+                 ON d.topic_kind = o.topic_kind
+                AND d.event_id = o.event_id
+              WHERE o.status = 'pending'
+                AND o.lane = $4
+                AND o.available_at_ms <= $1
+              ORDER BY d.topic ASC, d.topic_seq ASC, o.available_at_ms ASC, o.outbox_id ASC
               LIMIT $2
-              FOR UPDATE SKIP LOCKED
+              FOR UPDATE OF o SKIP LOCKED
          )
          UPDATE outbox_events o
             SET status = 'claimed',

@@ -538,6 +538,10 @@ async fn run_session_inner(
                     code: CLOSE_CODE_AUTH_REVOKED,
                     reason: "auth_revoked",
                 },
+                ConnectionRevocation::Backpressure => CloseDirective {
+                    code: CLOSE_CODE_AUTH_REVOKED,
+                    reason: "backpressure",
+                },
             };
             close_with_directive(ws, upgrade.role, directive).await;
             return directive.reason;
@@ -558,6 +562,10 @@ async fn run_session_inner(
                             ConnectionRevocation::AuthRevoked => CloseDirective {
                                 code: CLOSE_CODE_AUTH_REVOKED,
                                 reason: "auth_revoked",
+                            },
+                            ConnectionRevocation::Backpressure => CloseDirective {
+                                code: CLOSE_CODE_AUTH_REVOKED,
+                                reason: "backpressure",
                             },
                         };
                         close_with_directive(ws, upgrade.role, directive).await;

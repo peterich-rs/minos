@@ -276,6 +276,29 @@ fn apply_durable_event(
     }
 }
 
+
+async fn surface_snapshot_required(
+    topic: &str,
+    last_known_seq: i64,
+    ui_events_tx: &broadcast::Sender<UiEventFrame>,
+    subscription_mgr: &Arc<SubscriptionManager>,
+) {
+    subscription_mgr.clear_cursor(topic).await;
+    let _ = ui_events_tx.send(UiEventFrame {
+        session_id: String::new(),
+        seq: 0,
+        ui: UiEventMessage::Raw {
+            kind: "snapshot_required".into(),
+            payload_json: serde_json::json!({
+                "topic": topic,
+                "last_known_seq": last_known_seq,
+            })
+            .to_string(),
+        },
+        ts_ms: chrono::Utc::now().timestamp_millis(),
+    });
+}
+
 async fn dispatch_event(
     event: &RealtimeEvent,
     subscription_mgr: &Arc<SubscriptionManager>,
@@ -322,6 +345,19 @@ async fn dispatch_event(
             payload,
             ..
         } => {
+            // Continuity: never silently jump past a hole.
+            let applied = subscription_mgr.applied_seq(topic).await;
+            if applied > 0 && *topic_seq > applied + 1 {
+                tracing::warn!(
+                    topic,
+                    topic_seq,
+                    expected = applied + 1,
+                    "durable seq hole; requesting snapshot"
+                );
+                surface_snapshot_required(topic, applied, ui_events_tx, subscription_mgr).await;
+                return;
+            }
+
             let outcome = apply_durable_event(
                 topic,
                 *topic_seq,
@@ -332,10 +368,36 @@ async fn dispatch_event(
             );
             match outcome {
                 ApplyOutcome::AdvanceNow => {
-                    subscription_mgr.update_seq(topic, *topic_seq).await;
+                    // Do not leapfrog a smaller seq held for Dart apply.
+                    if subscription_mgr.has_pending_hold(topic).await {
+                        tracing::debug!(
+                            topic,
+                            topic_seq,
+                            "skip AdvanceNow while topic has pending Dart hold"
+                        );
+                    } else {
+                        match subscription_mgr.update_seq(topic, *topic_seq).await {
+                            crate::realtime::subscription::CursorAdvance::Hole { expected } => {
+                                tracing::warn!(
+                                    topic,
+                                    topic_seq,
+                                    expected,
+                                    "durable seq hole on AdvanceNow; requesting snapshot"
+                                );
+                                surface_snapshot_required(
+                                    topic,
+                                    expected - 1,
+                                    ui_events_tx,
+                                    subscription_mgr,
+                                )
+                                .await;
+                            }
+                            _ => {}
+                        }
+                    }
                 }
                 ApplyOutcome::AwaitDartAck => {
-                    // Cursor stays until MobileClient::ack_durable_applied.
+                    subscription_mgr.mark_pending_hold(topic, *topic_seq).await;
                 }
                 ApplyOutcome::Hold => {}
             }

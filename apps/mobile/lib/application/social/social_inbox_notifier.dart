@@ -21,6 +21,9 @@ final conversationsProvider =
 /// InboxSync: incremental patch; full REST only hydrate / refresh / snapshot.
 class ConversationsController extends AsyncNotifier<ConversationsResponse> {
   StreamSubscription<SocialEventFrame>? _eventsSub;
+  /// Serialize per-frame apply/ack so concurrent unawaited handlers cannot
+  /// advance durable cursors out of order across topics.
+  Future<void> _socialApplyChain = Future<void>.value();
 
   @override
   Future<ConversationsResponse> build() async {
@@ -33,7 +36,11 @@ class ConversationsController extends AsyncNotifier<ConversationsResponse> {
         .listen(
           (frame) {
             // Hot path: single-row patch — never invalidateSelf / full REST.
-            unawaited(_onSocialEvent(frame));
+            // Chain applies so ack_durable_applied stays topic-order safe.
+            _socialApplyChain = _socialApplyChain
+                .catchError((_) {})
+                .then((_) => _onSocialEvent(frame));
+            unawaited(_socialApplyChain);
           },
           onError: (Object error, StackTrace stackTrace) {
             // Connection errors: soft; next hydrate corrects.

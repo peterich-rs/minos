@@ -5,16 +5,16 @@
  *   Disconnected → Connecting → Syncing → Live
  *   per-topic resume_after cursors (localStorage)
  *   Subscribe conversation:{id} when open
- *   SnapshotRequired → clear cursor + cold rebuild callback
+ *   SnapshotRequired / seq hole → clear cursor + cold rebuild callback
  */
 
 import {
-  advanceTopicCursor,
   clearTopicCursor,
   conversationTopic,
   loadTopicCursors,
   resumeAfterFromCursors,
   saveTopicCursors,
+  tryAdvanceTopicCursor,
   type TopicCursorMap,
 } from "@/shared/lib/cloud-cursors";
 import { conversationSubscriptionLruTouch } from "@/shared/lib/conversation-sub-lru";
@@ -477,12 +477,27 @@ export class CloudRealtimeSession {
     saveTopicCursors(this.cursors);
   }
 
+  /**
+   * Advance cursor only on continuous seq. Holes trigger SnapshotRequired
+   * without silently jumping past missing durable events.
+   */
   private noteTopicSeq(topic: string | undefined, topicSeq: number | undefined): void {
     if (!topic || topicSeq == null || !Number.isFinite(topicSeq)) return;
-    const next = advanceTopicCursor(this.cursors, topic, topicSeq);
-    if (next !== this.cursors) {
-      this.cursors = next;
+    const result = tryAdvanceTopicCursor(this.cursors, topic, topicSeq);
+    if (result.kind === "advanced") {
+      this.cursors = result.cursors;
       this.persistCursors();
+      return;
+    }
+    if (result.kind === "hole") {
+      console.warn("[cloud-realtime] durable seq hole; requesting snapshot", {
+        topic,
+        expected: result.expected,
+        got: result.got,
+      });
+      this.cursors = clearTopicCursor(this.cursors, topic);
+      this.persistCursors();
+      this.handlers.onSnapshotRequired?.(topic);
     }
   }
 

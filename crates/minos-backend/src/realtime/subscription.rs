@@ -18,6 +18,9 @@ pub enum ConnectionRevocation {
     Superseded,
     /// Auth backing was revoked (host unlink, token revoke, process shutdown).
     AuthRevoked,
+    /// Durable outbound queue / catch-up barrier overflow — fail closed so the
+    /// client reconnects and resumes from its cursor instead of silently skipping.
+    Backpressure,
 }
 
 const SEEN_DURABLE_EVENT_IDS_CAPACITY: usize = 1024;
@@ -222,17 +225,19 @@ impl ConnectionState {
             if let Ok(parsed) = RealtimeTopic::parse(topic) {
                 let mut barriers = write_lock(&self.catchup_barriers);
                 if let Some(barrier) = barriers.get_mut(&parsed) {
-                    if barrier.buffer.len() >= BARRIER_BUFFER_CAPACITY {
-                        if let Some(oldest_seq) = barrier.buffer.keys().next().copied() {
-                            barrier.buffer.remove(&oldest_seq);
-                            tracing::warn!(
-                                target: "minos_backend::realtime::subscription",
-                                conn_id = %self.conn_id,
-                                topic = %topic,
-                                dropped_seq = oldest_seq,
-                                "catchup barrier buffer full; dropped oldest live frame"
-                            );
-                        }
+                    if barrier.buffer.len() >= BARRIER_BUFFER_CAPACITY
+                        && !barrier.buffer.contains_key(&topic_seq)
+                    {
+                        tracing::warn!(
+                            target: "minos_backend::realtime::subscription",
+                            conn_id = %self.conn_id,
+                            topic = %topic,
+                            topic_seq,
+                            "catchup barrier buffer full; revoking connection (no-drop)"
+                        );
+                        drop(barriers);
+                        self.revoke(ConnectionRevocation::Backpressure);
+                        return Err(Box::new(mpsc::error::TrySendError::Full(frame)));
                     }
                     barrier
                         .buffer

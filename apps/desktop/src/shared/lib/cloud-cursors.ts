@@ -30,7 +30,29 @@ function parseTopicCursors(raw: string | null): TopicCursorMap {
   }
 }
 
-/** Pure: merge one topic_seq into a cursor map (monotonic). */
+/** Result of attempting to advance a topic cursor with continuity checks. */
+export type AdvanceCursorResult =
+  | { kind: "unchanged"; cursors: TopicCursorMap }
+  | { kind: "advanced"; cursors: TopicCursorMap }
+  | { kind: "hole"; cursors: TopicCursorMap; expected: number; got: number };
+
+/**
+ * Pure: true when `topicSeq` skips ahead of a known applied cursor.
+ * Fresh/cleared cursors (missing or 0) never report a hole — SnapshotRequired
+ * catch-up and first-subscribe may land on a high seq after retention.
+ */
+export function isTopicSeqHole(
+  cursors: TopicCursorMap,
+  topic: string,
+  topicSeq: number,
+): boolean {
+  if (!topic || !Number.isFinite(topicSeq) || topicSeq < 0) return false;
+  const prev = cursors[topic];
+  if (prev == null || prev <= 0) return false;
+  return topicSeq > prev + 1;
+}
+
+/** Pure: merge one topic_seq into a cursor map (monotonic, no hole check). */
 export function advanceTopicCursor(
   cursors: TopicCursorMap,
   topic: string,
@@ -44,6 +66,31 @@ export function advanceTopicCursor(
     return cursors;
   }
   return { ...cursors, [topic]: topicSeq };
+}
+
+/**
+ * Pure: advance only on continuous seq (cursor+1 or first/zero cursor).
+ * Holes leave the map unchanged so the caller can request SnapshotRequired.
+ */
+export function tryAdvanceTopicCursor(
+  cursors: TopicCursorMap,
+  topic: string,
+  topicSeq: number,
+): AdvanceCursorResult {
+  if (!topic || !Number.isFinite(topicSeq) || topicSeq < 0) {
+    return { kind: "unchanged", cursors };
+  }
+  const prev = cursors[topic];
+  if (prev != null && topicSeq <= prev) {
+    return { kind: "unchanged", cursors };
+  }
+  if (prev != null && prev > 0 && topicSeq > prev + 1) {
+    return { kind: "hole", cursors, expected: prev + 1, got: topicSeq };
+  }
+  return {
+    kind: "advanced",
+    cursors: { ...cursors, [topic]: topicSeq },
+  };
 }
 
 /** Pure: drop a topic cursor (e.g. SnapshotRequired). */
