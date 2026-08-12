@@ -21,6 +21,7 @@ final conversationsProvider =
 /// InboxSync: incremental patch; full REST only hydrate / refresh / snapshot.
 class ConversationsController extends AsyncNotifier<ConversationsResponse> {
   StreamSubscription<SocialEventFrame>? _eventsSub;
+
   /// Serialize per-frame apply/ack so concurrent unawaited handlers cannot
   /// advance durable cursors out of order across topics.
   Future<void> _socialApplyChain = Future<void>.value();

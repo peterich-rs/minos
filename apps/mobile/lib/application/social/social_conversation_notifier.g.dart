@@ -59,7 +59,7 @@ final class SocialConversationProvider
 }
 
 String _$socialConversationHash() =>
-    r'64771e181d3a87eef524c0f81b032d1b1ea6c608';
+    r'32e4fffbaa9f33065cfea6eff7bed4b020b94eeb';
 
 final class SocialConversationFamily extends $Family
     with

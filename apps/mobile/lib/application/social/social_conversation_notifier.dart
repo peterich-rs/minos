@@ -26,6 +26,7 @@ class SocialConversation extends _$SocialConversation {
 
   StreamSubscription<SocialEventFrame>? _eventsSub;
   Timer? _markReadTimer;
+
   /// Serialize apply+ack so concurrent frames cannot race durable cursors.
   Future<void> _durableApplyChain = Future<void>.value();
 
@@ -399,7 +400,9 @@ class SocialConversation extends _$SocialConversation {
     if (frame.kind == 'reaction_updated') {
       final mid = frame.message.messageId.trim();
       if (mid.isEmpty) return;
-      _durableApplyChain = _durableApplyChain.catchError((_) {}).then((_) async {
+      _durableApplyChain = _durableApplyChain.catchError((_) {}).then((
+        _,
+      ) async {
         await _applyRemoteReactions(mid, frame.message.reactions);
         await _ackDurable(frame);
       });
