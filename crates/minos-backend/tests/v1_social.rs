@@ -5,8 +5,8 @@ use minos_backend::http::test_support::seed_live_connection;
 use minos_backend::http::{router, test_support::backend_state, test_support::TEST_JWT_SECRET};
 use minos_backend::store::test_support::{insert_test_client, insert_test_host};
 use minos_backend::store::{
-    agent_sessions, device_installations, durable_event_log, host_commands, host_links, raw_events,
-    sessions, social,
+    agent_sessions, devices, durable_event_log, host_commands, host_links, raw_events, sessions,
+    social,
 };
 use minos_domain::{AgentName, DeviceId, DeviceRole};
 use pretty_assertions::assert_eq;
@@ -62,7 +62,7 @@ async fn seed_host_pair_for_account(
         .await;
     };
     // host account_id stays NULL (kind=host CHECK)
-    device_installations::set_account_id(&state.store, &mobile_device_id, account_id)
+    devices::set_account_id(&state.store, &mobile_device_id, account_id)
         .await
         .unwrap();
     host_links::insert_pair(
@@ -479,7 +479,7 @@ async fn assert_agent_start_host_command(
         .unwrap()
         .expect("host command should be recorded for social agent session start");
 
-    assert_eq!(row.host_installation_id, host_device_id);
+    assert_eq!(row.host_device_id, host_device_id);
     assert_eq!(row.method, "agent_session.start");
     assert_eq!(row.agent_session_id.as_deref(), Some(session_id));
     assert_eq!(
@@ -525,7 +525,7 @@ async fn assert_agent_send_host_command(
         .unwrap()
         .expect("host command should be recorded for social agent input");
 
-    assert_eq!(row.host_installation_id, host_device_id);
+    assert_eq!(row.host_device_id, host_device_id);
     assert_eq!(row.method, "agent_session.send_input");
     assert_eq!(row.agent_session_id.as_deref(), Some(session_id));
     assert_eq!(
@@ -956,7 +956,7 @@ async fn delete_conversation_stops_running_agent_session_and_hides_for_caller() 
         .await
         .unwrap()
         .expect("delete should enqueue stop for running agent session");
-    assert_eq!(stop_command.host_installation_id, host_device_id);
+    assert_eq!(stop_command.host_device_id, host_device_id);
     assert_eq!(stop_command.method, "agent_session.stop");
     assert_eq!(stop_command.params_json["session_id"], "sess-delete-1");
     assert!(

@@ -393,6 +393,7 @@ async fn delete_ready_for_retention_sqlite(
     ))?;
 
     // Include topic_seq so retention_floor advances without relying on payload rows.
+    // Dead-letter outbox rows keep ack_at_ms NULL; treat terminal dead as reclaimable.
     let keys = sqlx::query_as::<_, (String, String, String, i64)>(
         "SELECT d.topic_kind, d.topic, d.event_id, d.topic_seq
            FROM durable_event_log d
@@ -400,6 +401,7 @@ async fn delete_ready_for_retention_sqlite(
              ON o.topic_kind = d.topic_kind
             AND o.event_id = d.event_id
             AND o.ack_at_ms IS NULL
+            AND o.dead_at_ms IS NULL
           WHERE d.created_at_ms < ?
             AND o.outbox_id IS NULL
        ORDER BY d.created_at_ms ASC, d.event_id ASC
@@ -420,7 +422,7 @@ async fn delete_ready_for_retention_sqlite(
             "DELETE FROM outbox_events
               WHERE topic_kind = ?
                 AND event_id = ?
-                AND ack_at_ms IS NOT NULL",
+                AND (ack_at_ms IS NOT NULL OR dead_at_ms IS NOT NULL OR status = 'dead')",
         )
         .bind(&topic_kind)
         .bind(&event_id)
@@ -489,6 +491,7 @@ async fn delete_ready_for_retention_postgres(
              ON o.topic_kind = d.topic_kind
             AND o.event_id = d.event_id
             AND o.ack_at_ms IS NULL
+            AND o.dead_at_ms IS NULL
           WHERE d.created_at_ms < $1
             AND o.outbox_id IS NULL
        ORDER BY d.created_at_ms ASC, d.event_id ASC
@@ -509,7 +512,7 @@ async fn delete_ready_for_retention_postgres(
             "DELETE FROM outbox_events
               WHERE topic_kind = $1
                 AND event_id = $2
-                AND ack_at_ms IS NOT NULL",
+                AND (ack_at_ms IS NOT NULL OR dead_at_ms IS NOT NULL OR status = 'dead')",
         )
         .bind(&topic_kind)
         .bind(&event_id)

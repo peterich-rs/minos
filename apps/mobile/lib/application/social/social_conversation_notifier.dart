@@ -27,6 +27,9 @@ class SocialConversation extends _$SocialConversation {
   StreamSubscription<SocialEventFrame>? _eventsSub;
   Timer? _markReadTimer;
 
+  /// Serialize apply+ack so concurrent frames cannot race durable cursors.
+  Future<void> _durableApplyChain = Future<void>.value();
+
   late final String _conversationId;
 
   @override
@@ -397,11 +400,13 @@ class SocialConversation extends _$SocialConversation {
     if (frame.kind == 'reaction_updated') {
       final mid = frame.message.messageId.trim();
       if (mid.isEmpty) return;
-      unawaited(
-        _applyRemoteReactions(mid, frame.message.reactions).then((_) {
-          return _ackDurable(frame);
-        }),
-      );
+      _durableApplyChain = _durableApplyChain.catchError((_) {}).then((
+        _,
+      ) async {
+        await _applyRemoteReactions(mid, frame.message.reactions);
+        await _ackDurable(frame);
+      });
+      unawaited(_durableApplyChain);
       return;
     }
     // Full T1 conversation frames only.
@@ -412,9 +417,11 @@ class SocialConversation extends _$SocialConversation {
     if (frame.message.messageId.trim().isEmpty) {
       return;
     }
-    unawaited(
-      _applyRemoteMessage(frame.message).then((_) => _ackDurable(frame)),
-    );
+    _durableApplyChain = _durableApplyChain.catchError((_) {}).then((_) async {
+      await _applyRemoteMessage(frame.message);
+      await _ackDurable(frame);
+    });
+    unawaited(_durableApplyChain);
   }
 
   Future<void> _ackDurable(SocialEventFrame frame) async {

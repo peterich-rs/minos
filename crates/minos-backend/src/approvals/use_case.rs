@@ -103,12 +103,31 @@ impl DefaultApprovalService {
     }
 
     async fn poll_expired(&self) -> Result<(), BackendError> {
-        let rows = store::approval_requests::list_expired_pending(
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        // Reclaim pending rows with NULL host that would otherwise pin the deadline forever.
+        match store::approval_requests::timeout_pending_with_null_host(
             &self.store,
-            chrono::Utc::now().timestamp_millis(),
+            now_ms,
             EXPIRED_BATCH_SIZE,
         )
-        .await?;
+        .await
+        {
+            Ok(0) => {}
+            Ok(n) => tracing::warn!(
+                target: "minos_backend::approvals",
+                count = n,
+                "timed out pending approvals with NULL host installation"
+            ),
+            Err(error) => tracing::warn!(
+                target: "minos_backend::approvals",
+                error = %error,
+                "failed to timeout NULL-host pending approvals"
+            ),
+        }
+
+        let rows =
+            store::approval_requests::list_expired_pending(&self.store, now_ms, EXPIRED_BATCH_SIZE)
+                .await?;
 
         for row in rows {
             self.resolve_automatically(row, ApprovalRequestState::Timeout)
@@ -468,6 +487,9 @@ async fn timeout_poller(service: Weak<DefaultApprovalService>) {
                     "approval timeout poller iteration failed"
                 );
             }
+            // Always sleep after a due-deadline tick. Without this, a pending
+            // row that cannot be decoded/resolved (e.g. NULL host) busy-loops.
+            tokio::time::sleep(POLLER_RETRY_DELAY).await;
             continue;
         }
 

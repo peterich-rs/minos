@@ -31,7 +31,7 @@ async fn first_connect_resolves_role_without_inserting() {
     );
 
     assert!(
-        minos_backend::store::device_installations::get_device(&pool, id)
+        minos_backend::store::devices::get_device(&pool, id)
             .await
             .unwrap()
             .is_none(),

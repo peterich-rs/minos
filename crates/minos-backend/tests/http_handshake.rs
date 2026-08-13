@@ -228,7 +228,7 @@ async fn ws_client_ticket_connect_emits_hello_frame() {
         other => panic!("expected Hello, got {other:?}"),
     }
 
-    let row = store::device_installations::get_device(&pool, id)
+    let row = store::devices::get_device(&pool, id)
         .await
         .unwrap()
         .unwrap();

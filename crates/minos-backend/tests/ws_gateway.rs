@@ -218,7 +218,7 @@ async fn seed_session(
             conversation_id: conversation_id.to_string(),
             project_id: None,
             agent_id,
-            host_installation_id: Some(host_id.to_string()),
+            host_device_id: Some(host_id.to_string()),
             workspace_path: None,
             initial_user_message: initial_user_message.map(str::to_string),
             origin_message_id: None,
@@ -375,7 +375,7 @@ async fn client_subscribe_replays_agent_session_durable_events() -> anyhow::Resu
             assert_eq!(topic, format!("agent_session:{}", output.session_id));
             assert_eq!(kind, "agent_session_started");
             assert_eq!(payload["session_id"], output.session_id);
-            assert_eq!(payload["host_installation_id"], host_id.to_string());
+            assert_eq!(payload["host_device_id"], host_id.to_string());
         }
         other => panic!("expected DurableEvent replay, got {other:?}"),
     }
@@ -460,7 +460,7 @@ async fn seed_host_durable_events(
         let event_id = format!("seed-host-{host}-{seq}");
         let payload = serde_json::json!({
             "kind": "host_force_close",
-            "host_installation_id": host,
+            "host_device_id": host,
             "reason": "seed",
             "at_ms": seq * 1000,
         });

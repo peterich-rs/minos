@@ -35,6 +35,7 @@ export function createWorkspaceActions(
   | "respondOpencodePermission"
   | "respondOpencodeQuestion"
   | "markConversationRead"
+  | "clearFocusedConversation"
   | "sendMessage"
   | "retryFailedMessage"
   | "createConversation"

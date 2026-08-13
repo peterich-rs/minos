@@ -61,7 +61,7 @@ describe("host-credential-controller", () => {
       return registerHostCredential(
         {
           prepareLink: async () => ({
-            installationId: "host-a",
+            deviceId: "host-a",
             publicKey: "pk",
             nonce: "n",
           }),
@@ -69,7 +69,7 @@ describe("host-credential-controller", () => {
           registerHost: async () => {
             await registerGate;
             return {
-              hostInstallationId: "host-a",
+              hostDeviceId: "host-a",
               hostInstallationToken: "hit_account_a",
               pairId: "pair-a",
               accountId: "acc-a",
@@ -99,13 +99,13 @@ describe("host-credential-controller", () => {
       return registerHostCredential(
         {
           prepareLink: async () => ({
-            installationId: "host-b",
+            deviceId: "host-b",
             publicKey: "pk",
             nonce: "n",
           }),
           signLinkProof: async () => ({ signature: "sig" }),
           registerHost: async () => ({
-            hostInstallationId: "host-b",
+            hostDeviceId: "host-b",
             hostInstallationToken: "hit_account_b",
             pairId: "pair-b",
             accountId: "acc-b",

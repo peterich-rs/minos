@@ -47,8 +47,7 @@ async fn list_clis(
     Json(request): Json<ListHostClisRequest>,
 ) -> Result<Json<ListClisResponse>, (StatusCode, Json<ErrorEnvelope>)> {
     let (_caller_device_id, account_id) = super::require_authed_session(&state, &headers).await?;
-    let host_device_id =
-        require_paired_host(&state, &account_id, &request.host_installation_id).await?;
+    let host_device_id = require_paired_host(&state, &account_id, &request.host_device_id).await?;
 
     let response = state
         .host_commands
@@ -75,8 +74,7 @@ async fn list_host_skills(
     Json(request): Json<ListHostSkillsCommandRequest>,
 ) -> Result<Json<ListHostSkillsResponse>, (StatusCode, Json<ErrorEnvelope>)> {
     let (_caller_device_id, account_id) = super::require_authed_session(&state, &headers).await?;
-    let host_device_id =
-        require_paired_host(&state, &account_id, &request.host_installation_id).await?;
+    let host_device_id = require_paired_host(&state, &account_id, &request.host_device_id).await?;
     let params = serde_json::to_value(ListHostSkillsRequest {
         workspace: request.workspace,
         force_reload: request.force_reload,
@@ -108,8 +106,7 @@ async fn list_host_workspaces(
     Json(request): Json<ListHostWorkspacesCommandRequest>,
 ) -> Result<Json<ListHostWorkspacesResponse>, (StatusCode, Json<ErrorEnvelope>)> {
     let (_caller_device_id, account_id) = super::require_authed_session(&state, &headers).await?;
-    let host_device_id =
-        require_paired_host(&state, &account_id, &request.host_installation_id).await?;
+    let host_device_id = require_paired_host(&state, &account_id, &request.host_device_id).await?;
     let params = serde_json::to_value(ListHostWorkspacesRequest {
         root: request.root,
         limit: request.limit,
@@ -141,8 +138,7 @@ async fn write_host_skill_config(
     Json(request): Json<WriteHostSkillConfigCommandRequest>,
 ) -> Result<Json<WriteHostSkillConfigResponse>, (StatusCode, Json<ErrorEnvelope>)> {
     let (_caller_device_id, account_id) = super::require_authed_session(&state, &headers).await?;
-    let host_device_id =
-        require_paired_host(&state, &account_id, &request.host_installation_id).await?;
+    let host_device_id = require_paired_host(&state, &account_id, &request.host_device_id).await?;
     let params = serde_json::to_value(WriteHostSkillConfigRequest {
         workspace: request.workspace,
         path: request.path,
@@ -172,16 +168,14 @@ async fn write_host_skill_config(
 async fn require_paired_host(
     state: &BackendState,
     account_id: &str,
-    host_installation_id: &str,
+    host_device_id: &str,
 ) -> Result<DeviceId, (StatusCode, Json<ErrorEnvelope>)> {
-    let host_device_id = Uuid::parse_str(host_installation_id)
-        .map(DeviceId)
-        .map_err(|_| {
-            (
-                StatusCode::BAD_REQUEST,
-                err_json("bad_request", "invalid host_installation_id"),
-            )
-        })?;
+    let host_device_id = Uuid::parse_str(host_device_id).map(DeviceId).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            err_json("bad_request", "invalid host_device_id"),
+        )
+    })?;
 
     let paired = state
         .data

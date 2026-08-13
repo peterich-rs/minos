@@ -897,7 +897,7 @@ async fn touch_device_last_seen(
     device_id: minos_domain::DeviceId,
     operation: &'static str,
 ) {
-    if let Err(error) = crate::store::device_installations::touch_last_seen(
+    if let Err(error) = crate::store::devices::touch_last_seen(
         &state.store,
         &device_id,
         chrono::Utc::now().timestamp_millis(),
@@ -1003,7 +1003,7 @@ pub mod test_support {
         let (tx, rx) = mpsc::channel::<ServerFrame>(8);
         let principal = match role {
             minos_domain::DeviceRole::AgentHost => ConnectionPrincipal::Host {
-                host_installation_id: device_id.to_string(),
+                host_device_id: device_id.to_string(),
             },
             _ => ConnectionPrincipal::Account {
                 account_id: account_id.unwrap_or("acct-test").to_string(),
@@ -1185,7 +1185,7 @@ mod tests {
                     .uri("/v1/host/bootstrap/nonce")
                     .header("content-type", "application/json")
                     .body(Body::from(
-                        r#"{"installation_id":"00000000-0000-0000-0000-000000000001"}"#,
+                        r#"{"device_id":"00000000-0000-0000-0000-000000000001"}"#,
                     ))
                     .expect("request builder"),
             )
@@ -1201,7 +1201,7 @@ mod tests {
                     .uri("/v1/hosts/link")
                     .header("content-type", "application/json")
                     .body(Body::from(
-                        r#"{"installation_id":"00000000-0000-0000-0000-000000000001","nonce":"nonce_x","signature":"ed25519-sig:x"}"#,
+                        r#"{"device_id":"00000000-0000-0000-0000-000000000001","nonce":"nonce_x","signature":"ed25519-sig:x"}"#,
                     ))
                     .expect("request builder"),
             )
@@ -1217,7 +1217,7 @@ mod tests {
                     .uri("/v1/realtime/ws-ticket")
                     .header("content-type", "application/json")
                     .body(Body::from(
-                        r#"{"installation_id":"00000000-0000-0000-0000-000000000001"}"#,
+                        r#"{"device_id":"00000000-0000-0000-0000-000000000001"}"#,
                     ))
                     .expect("request builder"),
             )

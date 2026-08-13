@@ -1,6 +1,9 @@
 //! `push_tokens` table CRUD. Supports both SQLite and Postgres via
-//! `AsStorePool` dispatch. Tokens are hashed (SHA-256) before storage
-//! so the raw device token never persists.
+//! `AsStorePool` dispatch.
+//!
+//! Rows keep a SHA-256 `token_hash` as the stable primary key for upsert/revoke
+//! and a `provider_token` column with the raw APNs/FCM device token required
+//! for delivery. Hash-only storage made push structurally undeliverable.
 
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, SqlitePool};
@@ -12,12 +15,15 @@ use crate::store::{AsStorePool, StorePoolRef};
 pub struct PushTokenRow {
     pub token_hash: String,
     pub account_id: String,
-    pub installation_id: String,
+    pub device_id: String,
     pub kind: String,
     pub locale: Option<String>,
     pub created_at_ms: i64,
     pub last_used_at_ms: i64,
     pub revoked_at_ms: Option<i64>,
+    /// Raw provider device token used at send time. May be NULL for rows
+    /// registered before the provider_token migration.
+    pub provider_token: Option<String>,
 }
 
 /// Hash a raw push token for storage. Uses SHA-256 so the same token
@@ -29,11 +35,11 @@ pub fn hash_token(token: &str) -> String {
 }
 
 /// Upsert a push token. If the token_hash already exists, refreshes
-/// `last_used_at_ms` and `installation_id` (device may have reinstalled).
+/// `last_used_at_ms` and `device_id` (device may have reinstalled).
 pub async fn upsert<S>(
     store: &S,
     account_id: &str,
-    installation_id: &str,
+    device_id: &str,
     kind: &str,
     token: &str,
     locale: Option<&str>,
@@ -49,9 +55,10 @@ where
                 pool,
                 &token_hash,
                 account_id,
-                installation_id,
+                device_id,
                 kind,
                 locale,
+                token,
                 at_ms,
             )
             .await
@@ -61,9 +68,10 @@ where
                 pool,
                 &token_hash,
                 account_id,
-                installation_id,
+                device_id,
                 kind,
                 locale,
+                token,
                 at_ms,
             )
             .await
@@ -119,26 +127,29 @@ async fn upsert_sqlite(
     pool: &SqlitePool,
     token_hash: &str,
     account_id: &str,
-    installation_id: &str,
+    device_id: &str,
     kind: &str,
     locale: Option<&str>,
+    provider_token: &str,
     at_ms: i64,
 ) -> Result<PushTokenRow, BackendError> {
     sqlx::query_as::<_, PushTokenRow>(
-        "INSERT INTO push_tokens (token_hash, account_id, installation_id, kind, locale, created_at_ms, last_used_at_ms)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
+        "INSERT INTO push_tokens (token_hash, account_id, device_id, kind, locale, created_at_ms, last_used_at_ms, provider_token)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7)
          ON CONFLICT(token_hash) DO UPDATE SET
-             installation_id = excluded.installation_id,
+             device_id = excluded.device_id,
              last_used_at_ms = excluded.last_used_at_ms,
+             provider_token = excluded.provider_token,
              revoked_at_ms = NULL
          RETURNING *",
     )
     .bind(token_hash)
     .bind(account_id)
-    .bind(installation_id)
+    .bind(device_id)
     .bind(kind)
     .bind(locale)
     .bind(at_ms)
+    .bind(provider_token)
     .fetch_one(pool)
     .await
     .map_err(|e| BackendError::StoreQuery {
@@ -215,26 +226,29 @@ async fn upsert_postgres(
     pool: &PgPool,
     token_hash: &str,
     account_id: &str,
-    installation_id: &str,
+    device_id: &str,
     kind: &str,
     locale: Option<&str>,
+    provider_token: &str,
     at_ms: i64,
 ) -> Result<PushTokenRow, BackendError> {
     sqlx::query_as::<_, PushTokenRow>(
-        "INSERT INTO push_tokens (token_hash, account_id, installation_id, kind, locale, created_at_ms, last_used_at_ms)
-         VALUES ($1, $2, $3, $4, $5, $6, $6)
+        "INSERT INTO push_tokens (token_hash, account_id, device_id, kind, locale, created_at_ms, last_used_at_ms, provider_token)
+         VALUES ($1, $2, $3, $4, $5, $6, $6, $7)
          ON CONFLICT(token_hash) DO UPDATE SET
-             installation_id = EXCLUDED.installation_id,
+             device_id = EXCLUDED.device_id,
              last_used_at_ms = EXCLUDED.last_used_at_ms,
+             provider_token = EXCLUDED.provider_token,
              revoked_at_ms = NULL
          RETURNING *",
     )
     .bind(token_hash)
     .bind(account_id)
-    .bind(installation_id)
+    .bind(device_id)
     .bind(kind)
     .bind(locale)
     .bind(at_ms)
+    .bind(provider_token)
     .fetch_one(pool)
     .await
     .map_err(|e| BackendError::StoreQuery {

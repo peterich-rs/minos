@@ -82,14 +82,14 @@ describe("runHostEnsure", () => {
       isOnline: async () => false,
       registerPorts: {
         prepareLink: async () => ({
-          installationId: "host-1",
+          deviceId: "host-1",
           publicKey: "pk",
           nonce: "n",
         }),
         signLinkProof: async () => ({ signature: "sig" }),
         applyLinkToken: async () => ({ linked: true }),
         registerHost: async () => ({
-          hostInstallationId: "host-1",
+          hostDeviceId: "host-1",
           hostInstallationToken: "hit_x",
           pairId: "pair-1",
           accountId: "acc-1",

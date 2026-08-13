@@ -76,13 +76,122 @@ enum ActivationAuthError {
 pub async fn upgrade_client(
     State(state): State<BackendState>,
     Query(query): Query<GatewayWsQuery>,
+    headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Result<Response, (StatusCode, String)> {
-    let result = upgrade_with_ticket(state, query, ws, GatewayRail::Client).await;
+    // Native clients (Desktop Rust) send Authorization: Bearer <access JWT>.
+    // Browsers still use a one-shot ticket in the query string.
+    let result = if bearer_token_from_headers(&headers).is_some() {
+        upgrade_client_with_bearer(state, headers, ws).await
+    } else {
+        upgrade_with_ticket(state, query, ws, GatewayRail::Client).await
+    };
     if result.is_err() {
         crate::telemetry::record_ws_connect("preauth", crate::telemetry::OUTCOME_UNAUTHORIZED);
     }
     result
+}
+
+async fn upgrade_client_with_bearer(
+    state: BackendState,
+    headers: HeaderMap,
+    ws: WebSocketUpgrade,
+) -> Result<Response, (StatusCode, String)> {
+    let outcome = crate::auth::bearer::require_account(&state, &headers)
+        .map_err(|error| error.into_response_tuple())?;
+    let device_id = Uuid::parse_str(&outcome.device_id)
+        .map(DeviceId)
+        .map_err(|_| {
+            (
+                StatusCode::UNAUTHORIZED,
+                "invalid bearer device_id".to_string(),
+            )
+        })?;
+    let request_span = tracing::Span::current();
+    let account_id = outcome.account_id;
+    Ok(ws.on_upgrade(move |mut socket| {
+        let state = state.clone();
+        async move {
+            match revalidate_account_bearer_auth(&state.store, device_id, &account_id).await {
+                Ok(role) => {
+                    Box::pin(run_session(
+                        socket,
+                        state,
+                        GatewayUpgrade {
+                            device_id,
+                            role,
+                            principal: ConnectionPrincipal::Account {
+                                account_id: account_id.clone(),
+                            },
+                        },
+                    ))
+                    .await;
+                }
+                Err(ActivationAuthError::Unauthorized(message)) => {
+                    close_with_directive(
+                        &mut socket,
+                        DeviceRole::DesktopConsole,
+                        CloseDirective {
+                            code: CLOSE_CODE_AUTH_REVOKED,
+                            reason: "auth_revoked",
+                        },
+                    )
+                    .await;
+                    tracing::info!(
+                        target: "minos_backend::realtime",
+                        device_id = %device_id,
+                        reason = %message,
+                        "account bearer auth changed before activation; closing 4401"
+                    );
+                }
+                Err(ActivationAuthError::Internal(message)) => {
+                    close_with_directive(
+                        &mut socket,
+                        DeviceRole::DesktopConsole,
+                        CloseDirective {
+                            code: CLOSE_CODE_INTERNAL_ERROR,
+                            reason: "activation_revalidate_failed",
+                        },
+                    )
+                    .await;
+                    tracing::warn!(
+                        target: "minos_backend::realtime",
+                        device_id = %device_id,
+                        error = %message,
+                        "account bearer activation revalidation failed"
+                    );
+                }
+            }
+        }
+        .instrument(request_span)
+    }))
+}
+
+async fn revalidate_account_bearer_auth(
+    store: &crate::store::StoreHandle,
+    device_id: DeviceId,
+    account_id: &str,
+) -> Result<DeviceRole, ActivationAuthError> {
+    let row = crate::store::devices::get_device(store, device_id)
+        .await
+        .map_err(|error| ActivationAuthError::Internal(error.to_string()))?
+        .ok_or_else(|| {
+            ActivationAuthError::Unauthorized(
+                "device row missing during websocket activation".to_string(),
+            )
+        })?;
+    if !row.role.is_account_client() {
+        return Err(ActivationAuthError::Unauthorized(format!(
+            "device role is not an account client: {}",
+            row.role
+        )));
+    }
+    if row.account_id.as_deref() != Some(account_id) {
+        return Err(ActivationAuthError::Unauthorized(
+            "device account changed during websocket activation".to_string(),
+        ));
+    }
+    Ok(row.role)
 }
 
 pub async fn upgrade_host(
@@ -122,8 +231,8 @@ async fn upgrade_host_with_bearer(
     let principal = crate::auth::host_installation::require(&state, &headers)
         .await
         .map_err(|error| error.into_response_tuple())?;
-    let device_id = principal.host_installation_id;
-    let host_installation_id = device_id.to_string();
+    let device_id = principal.device_id;
+    let host_device_id = device_id.to_string();
     let request_span = tracing::Span::current();
     Ok(ws.on_upgrade(move |mut socket| {
         let state = state.clone();
@@ -136,9 +245,7 @@ async fn upgrade_host_with_bearer(
                         GatewayUpgrade {
                             device_id,
                             role: DeviceRole::AgentHost,
-                            principal: ConnectionPrincipal::Host {
-                                host_installation_id,
-                            },
+                            principal: ConnectionPrincipal::Host { host_device_id },
                         },
                     ))
                     .await;
@@ -244,7 +351,7 @@ async fn upgrade_with_ticket(
 
     let principal = if claims.role == DeviceRole::AgentHost {
         ConnectionPrincipal::Host {
-            host_installation_id: claims.did.clone(),
+            host_device_id: claims.did.clone(),
         }
     } else {
         ConnectionPrincipal::Account {
@@ -312,7 +419,7 @@ async fn revalidate_host_installation_auth(
     store: &crate::store::StoreHandle,
     device_id: DeviceId,
 ) -> Result<(), ActivationAuthError> {
-    let row = crate::store::device_installations::get_device(store, device_id)
+    let row = crate::store::devices::get_device(store, device_id)
         .await
         .map_err(|error| ActivationAuthError::Internal(error.to_string()))?
         .ok_or_else(|| {
@@ -336,7 +443,7 @@ async fn revalidate_ws_ticket_auth(
     let device_id = Uuid::parse_str(&claims.did)
         .map(DeviceId)
         .map_err(|_| ActivationAuthError::Unauthorized("invalid ws_ticket device_id".into()))?;
-    let row = crate::store::device_installations::get_device(store, device_id)
+    let row = crate::store::devices::get_device(store, device_id)
         .await
         .map_err(|error| ActivationAuthError::Internal(error.to_string()))?
         .ok_or_else(|| {
@@ -384,9 +491,9 @@ impl GatewayUpgrade {
             ConnectionPrincipal::Account { account_id } => {
                 RealtimeTopic::Account(account_id.clone())
             }
-            ConnectionPrincipal::Host {
-                host_installation_id,
-            } => RealtimeTopic::Host(host_installation_id.clone()),
+            ConnectionPrincipal::Host { host_device_id } => {
+                RealtimeTopic::Host(host_device_id.clone())
+            }
         }
     }
 }
@@ -473,7 +580,9 @@ pub async fn run_session(mut ws: WebSocket, state: BackendState, upgrade: Gatewa
     // Skip offline fanout when a newer connection already owns the device
     // (connection superseded / reconnect race). Unlink/auth revoke that already
     // cleared the registry still publishes offline (get is None).
-    if state.registry.get(upgrade.device_id).is_none() {
+    let rail =
+        crate::realtime::connection_registry::ConnectionRail::from_principal(&upgrade.principal);
+    if state.registry.get_rail(rail, upgrade.device_id).is_none() {
         presence::publish_connection_presence(
             &state,
             upgrade.device_id,
@@ -538,6 +647,10 @@ async fn run_session_inner(
                     code: CLOSE_CODE_AUTH_REVOKED,
                     reason: "auth_revoked",
                 },
+                ConnectionRevocation::Backpressure => CloseDirective {
+                    code: CLOSE_CODE_AUTH_REVOKED,
+                    reason: "backpressure",
+                },
             };
             close_with_directive(ws, upgrade.role, directive).await;
             return directive.reason;
@@ -558,6 +671,10 @@ async fn run_session_inner(
                             ConnectionRevocation::AuthRevoked => CloseDirective {
                                 code: CLOSE_CODE_AUTH_REVOKED,
                                 reason: "auth_revoked",
+                            },
+                            ConnectionRevocation::Backpressure => CloseDirective {
+                                code: CLOSE_CODE_AUTH_REVOKED,
+                                reason: "backpressure",
                             },
                         };
                         close_with_directive(ws, upgrade.role, directive).await;
@@ -692,7 +809,7 @@ async fn note_connection_activity(
     if !liveness::should_persist_last_seen(last_db_touch.elapsed(), LAST_SEEN_DB_MIN_INTERVAL) {
         return;
     }
-    if let Err(error) = crate::store::device_installations::touch_last_seen(
+    if let Err(error) = crate::store::devices::touch_last_seen(
         &state.store,
         &upgrade.device_id,
         chrono::Utc::now().timestamp_millis(),
@@ -785,11 +902,31 @@ async fn handle_formal_frame(
         }
         ClientFrame::Ping { ts } => {
             // Activity / last_seen already noted on the inbound text frame.
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            if upgrade.role == DeviceRole::AgentHost {
+                // Mailbox leases are 2 minutes; long agent turns need renewal via
+                // host keepalive so AppendBotMessage is not rejected mid-turn.
+                if let Err(error) = crate::store::agent_dispatch_queue::renew_leases_for_host(
+                    &state.store,
+                    &upgrade.device_id.to_string(),
+                    now_ms.saturating_add(crate::store::agent_dispatch_queue::DEFAULT_LEASE_TTL_MS),
+                    now_ms,
+                )
+                .await
+                {
+                    tracing::warn!(
+                        target: "minos_backend::realtime::gateway",
+                        error = %error,
+                        host_id = %upgrade.device_id,
+                        "failed to renew mailbox leases on host ping"
+                    );
+                }
+            }
             let _ = send_server_frame(
                 ws,
                 &ServerFrame::Pong {
                     ts,
-                    server_time_ms: chrono::Utc::now().timestamp_millis(),
+                    server_time_ms: now_ms,
                 },
             )
             .await;
@@ -809,7 +946,8 @@ async fn handle_formal_frame(
                 .await;
                 return Ok(None);
             }
-            match host_commands::ack(&state.store, &command_id, ack_at_ms).await {
+            match host_commands::ack(&state.store, &command_id, upgrade.device_id, ack_at_ms).await
+            {
                 Ok(_) => {
                     if let Err(error) = outbox_events::ack_pending_host_command_events(
                         &state.store,
@@ -868,6 +1006,7 @@ async fn handle_formal_frame(
             let finish_result = host_commands::finish(
                 &state.store,
                 &command_id,
+                upgrade.device_id,
                 if succeeded {
                     host_commands::HostCommandTerminalStatus::Succeeded
                 } else {
@@ -1117,6 +1256,14 @@ async fn handle_delivery_accepted(
         );
         return Ok(());
     }
+    let _ = crate::store::agent_dispatch_queue::renew_lease(
+        &state.store,
+        delivery_id,
+        &host_id,
+        now_ms.saturating_add(crate::store::agent_dispatch_queue::DEFAULT_LEASE_TTL_MS),
+        now_ms,
+    )
+    .await;
     tracing::info!(
         target: "minos_backend::realtime",
         delivery_id,
@@ -1222,6 +1369,14 @@ async fn handle_append_bot_message(
         );
         return Ok(());
     }
+    let _ = crate::store::agent_dispatch_queue::renew_lease(
+        &state.store,
+        delivery_id,
+        &host_id,
+        now_ms.saturating_add(crate::store::agent_dispatch_queue::DEFAULT_LEASE_TTL_MS),
+        now_ms,
+    )
+    .await;
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return Ok(());

@@ -40,9 +40,13 @@ import {
   type CloudMode,
 } from "@/shared/lib/host-status";
 import { daemonApi } from "@/shared/lib/daemon";
+import { isTauriRuntime } from "@/shared/lib/runtime";
 import { runHostEnsure } from "@/features/host/lib/host-connection-machine";
 import type { DesktopAuthPhase } from "@/shared/lib/desktop-root-gate";
-import { registerCloudAuthProvider } from "@/shared/lib/cloud-auth";
+import {
+  registerCloudAccessTokenRefresher,
+  registerCloudAuthProvider,
+} from "@/shared/lib/cloud-auth";
 import {
   bumpAccountScopeGeneration,
   leaveAccountScope,
@@ -123,6 +127,69 @@ let ensureInFlight: Promise<void> | null = null;
 let ensureGeneration = 0;
 let hydrateInFlight: Promise<void> | null = null;
 let hydrateGeneration = 0;
+let accessTokenRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+let accessTokenRefreshInFlight: Promise<string | null> | null = null;
+type AccountStoreApi = {
+  getState: () => AccountState;
+  setState: (
+    partial:
+      | Partial<AccountState>
+      | ((state: AccountState) => Partial<AccountState>),
+  ) => void;
+};
+let accountStoreApi: AccountStoreApi | null = null;
+
+function clearAccessTokenRefreshTimer(): void {
+  if (accessTokenRefreshTimer) {
+    clearTimeout(accessTokenRefreshTimer);
+    accessTokenRefreshTimer = null;
+  }
+}
+
+function scheduleAccessTokenRefresh(session: MinosSession): void {
+  clearAccessTokenRefreshTimer();
+  const expiresAt = session.issuedAtMs + session.expiresInSec * 1000;
+  // Refresh 90s before expiry (isAccessTokenFresh uses 60s skew).
+  const delay = Math.max(5_000, expiresAt - Date.now() - 90_000);
+  accessTokenRefreshTimer = setTimeout(() => {
+    void ensureFreshAccessTokenInternal();
+  }, delay);
+}
+
+async function ensureFreshAccessTokenInternal(): Promise<string | null> {
+  if (accessTokenRefreshInFlight) return accessTokenRefreshInFlight;
+  accessTokenRefreshInFlight = (async () => {
+    const api = accountStoreApi;
+    if (!api) return null;
+    const state = api.getState();
+    const session = state.session;
+    if (!session?.refreshToken?.trim()) return null;
+    if (isAccessTokenFresh(session)) {
+      scheduleAccessTokenRefresh(session);
+      return session.accessToken;
+    }
+    try {
+      const tokens = await refreshSession(state.deviceId, session.refreshToken);
+      const next: MinosSession = {
+        ...session,
+        accessToken: tokens.access_token,
+        refreshToken: tokens.refresh_token,
+        expiresInSec: tokens.expires_in,
+        issuedAtMs: Date.now(),
+      };
+      saveStoredSession(next);
+      api.setState({ session: next });
+      scheduleAccessTokenRefresh(next);
+      return next.accessToken;
+    } catch (error) {
+      console.warn("[account-store] access token refresh failed", error);
+      return null;
+    }
+  })().finally(() => {
+    accessTokenRefreshInFlight = null;
+  });
+  return accessTokenRefreshInFlight;
+}
 
 function applyAuthSuccess(
   set: (
@@ -144,8 +211,10 @@ function applyAuthSuccess(
   }
   saveStoredSession(session);
   const hostBind = loadStoredHostBind(session.accountId);
+  const hasHostToken = Boolean(session.hostToken?.trim());
   const hostOwned =
-    get().hostCredentialAccountId === nextAccountId && hostBind.bound;
+    hasHostToken ||
+    (get().hostCredentialAccountId === nextAccountId && hostBind.bound);
   set({
     session,
     hostBind,
@@ -162,8 +231,19 @@ function applyAuthSuccess(
   void import("@/store/im/im-cloud-bridge").then(({ ensureImCloudBridge }) =>
     ensureImCloudBridge(),
   );
+  if (hasHostToken) {
+    saveStoredHostBind(session.accountId, {
+      bound: true,
+      hostDeviceId: get().deviceId || null,
+      hostDisplayName: PROJECT_HOST_THIS_MAC,
+      boundAtMs: Date.now(),
+      pairId: null,
+    });
+  }
   const forceReregister =
-    !hostOwned || prevAccountId !== nextAccountId || !hostBind.bound;
+    !hasHostToken &&
+    (!hostOwned || prevAccountId !== nextAccountId || !hostBind.bound);
+  scheduleAccessTokenRefresh(session);
   void get().ensureCloudConnection(
     forceReregister ? { forceReregister: true } : undefined,
   );
@@ -194,6 +274,73 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
     const gen = ++hydrateGeneration;
     hydrateInFlight = (async () => {
       set({ authPhase: "booting", error: null });
+      if (isTauriRuntime()) {
+        try {
+          const { invoke } = await import("@tauri-apps/api/core");
+          const deviceId = await invoke<string>("account_device_id");
+          if (gen !== hydrateGeneration) return;
+          set({ deviceId });
+          const persisted = await invoke<{
+            accountId: string;
+            email: string;
+            refreshToken: string;
+            hostToken?: string | null;
+          } | null>("account_load_persisted");
+          if (!persisted?.refreshToken) {
+            if (gen !== hydrateGeneration) return;
+            set({
+              session: null,
+              hostBind: { ...EMPTY_HOST_BIND },
+              hostCredentialAccountId: null,
+              cloudStatus: "unknown",
+              accountSyncStatus: "unknown",
+              cloudError: null,
+              authPhase: "unauthenticated",
+              hydrated: true,
+            });
+            return;
+          }
+          const tokens = await invoke<{
+            accountId: string;
+            email: string;
+            accessToken: string;
+            refreshToken: string;
+            expiresIn: number;
+            hostToken?: string | null;
+          }>("account_refresh_session", {
+            refreshToken: persisted.refreshToken,
+          });
+          if (gen !== hydrateGeneration) return;
+          applyAuthSuccess(set, get, {
+            accountId: tokens.accountId,
+            email: tokens.email,
+            accessToken: tokens.accessToken,
+            refreshToken: tokens.refreshToken,
+            issuedAtMs: Date.now(),
+            expiresInSec: tokens.expiresIn,
+            hostToken: tokens.hostToken,
+          });
+          return;
+        } catch {
+          if (gen !== hydrateGeneration) return;
+          clearStoredSession();
+          ensureGeneration += 1;
+          ensureInFlight = null;
+          leaveAccountScope("auth-invalid");
+          set({
+            session: null,
+            hostBind: { ...EMPTY_HOST_BIND },
+            hostCredentialAccountId: null,
+            cloudStatus: "unknown",
+            accountSyncStatus: "unknown",
+            cloudError: null,
+            authPhase: "unauthenticated",
+            hydrated: true,
+            error: null,
+          });
+          return;
+        }
+      }
       const stored = loadStoredSession();
       if (!stored) {
         if (gen !== hydrateGeneration) return;
@@ -223,6 +370,7 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
           authPhase: "authenticated",
           hydrated: true,
         });
+        scheduleAccessTokenRefresh(stored);
         void import("@/store/im/im-cloud-bridge").then(({ ensureImCloudBridge }) =>
           ensureImCloudBridge(),
         );
@@ -280,8 +428,33 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
           "Supabase is required (set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY).",
         );
       }
-      const deviceId = get().deviceId;
       const supabaseToken = await signInWithSupabasePassword(email, password);
+      if (isTauriRuntime()) {
+        const { invoke } = await import("@tauri-apps/api/core");
+        const auth = await invoke<{
+          accountId: string;
+          email: string;
+          accessToken: string;
+          refreshToken: string;
+          expiresIn: number;
+          hostToken?: string | null;
+          deviceId: string;
+        }>("account_exchange_supabase", {
+          supabaseAccessToken: supabaseToken,
+        });
+        set({ deviceId: auth.deviceId });
+        applyAuthSuccess(set, get, {
+          accountId: auth.accountId,
+          email: auth.email,
+          accessToken: auth.accessToken,
+          refreshToken: auth.refreshToken,
+          issuedAtMs: Date.now(),
+          expiresInSec: auth.expiresIn,
+          hostToken: auth.hostToken,
+        });
+        return true;
+      }
+      const deviceId = get().deviceId;
       const auth = await exchangeSupabaseSession(deviceId, supabaseToken);
       applyAuthSuccess(set, get, sessionFromAuthResponse(auth));
       return true;
@@ -300,8 +473,33 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
           "Supabase is required (set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY).",
         );
       }
-      const deviceId = get().deviceId;
       const supabaseToken = await signUpWithSupabasePassword(email, password);
+      if (isTauriRuntime()) {
+        const { invoke } = await import("@tauri-apps/api/core");
+        const auth = await invoke<{
+          accountId: string;
+          email: string;
+          accessToken: string;
+          refreshToken: string;
+          expiresIn: number;
+          hostToken?: string | null;
+          deviceId: string;
+        }>("account_exchange_supabase", {
+          supabaseAccessToken: supabaseToken,
+        });
+        set({ deviceId: auth.deviceId });
+        applyAuthSuccess(set, get, {
+          accountId: auth.accountId,
+          email: auth.email,
+          accessToken: auth.accessToken,
+          refreshToken: auth.refreshToken,
+          issuedAtMs: Date.now(),
+          expiresInSec: auth.expiresIn,
+          hostToken: auth.hostToken,
+        });
+        return true;
+      }
+      const deviceId = get().deviceId;
       const auth = await exchangeSupabaseSession(deviceId, supabaseToken);
       applyAuthSuccess(set, get, sessionFromAuthResponse(auth));
       return true;
@@ -313,6 +511,7 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
   },
 
   signOut: async () => {
+    clearAccessTokenRefreshTimer();
     const { session, deviceId } = get();
     set({ busy: true, error: null });
     ensureGeneration += 1;
@@ -322,7 +521,15 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
     bumpAccountScopeGeneration();
     if (session) {
       try {
-        await logoutSession(deviceId, session.accessToken, session.refreshToken);
+        if (isTauriRuntime()) {
+          const { invoke } = await import("@tauri-apps/api/core");
+          await invoke("account_sign_out", {
+            accessToken: session.accessToken,
+            refreshToken: session.refreshToken,
+          });
+        } else {
+          await logoutSession(deviceId, session.accessToken, session.refreshToken);
+        }
       } catch {
         // best-effort revoke
       }
@@ -379,8 +586,8 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
             (await refreshDaemonCloudFlags()).cloudOnline,
           registerPorts: {
             prepareLink: () => daemonApi.hostPrepareLink(),
-            signLinkProof: (installationId, nonce) =>
-              daemonApi.hostSignLinkProof(installationId, nonce),
+            signLinkProof: (deviceId, nonce) =>
+              daemonApi.hostSignLinkProof(deviceId, nonce),
             applyLinkToken: (token) => daemonApi.hostApplyLinkToken(token),
             registerHost: (input) =>
               cloudLinkHost(get().deviceId, session.accessToken, input),
@@ -422,7 +629,7 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
 
       const hostBind: HostBindState = {
         bound: true,
-        hostInstallationId: result.hostInstallationId,
+        hostDeviceId: result.hostDeviceId,
         hostDisplayName: result.hostDisplayName,
         boundAtMs: result.linkedAtMs,
         pairId: result.pairId,
@@ -489,6 +696,11 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
   },
 }));
 
+accountStoreApi = {
+  getState: () => useAccountStore.getState(),
+  setState: (partial) => useAccountStore.setState(partial),
+};
+
 // Shared transport reads auth via this port — never imports account-store.
 registerCloudAuthProvider(() => {
   const { deviceId, session, authPhase } = useAccountStore.getState();
@@ -502,3 +714,5 @@ registerCloudAuthProvider(() => {
     authPhase,
   };
 });
+
+registerCloudAccessTokenRefresher(() => ensureFreshAccessTokenInternal());

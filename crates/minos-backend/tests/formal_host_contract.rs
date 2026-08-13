@@ -34,16 +34,16 @@ async fn post_json(
 }
 
 #[tokio::test]
-async fn host_bootstrap_nonce_issues_for_valid_installation_id() {
+async fn host_bootstrap_nonce_issues_for_valid_device_id() {
     let state = backend_state().await;
-    let installation_id = DeviceId::new().to_string();
+    let device_id = DeviceId::new().to_string();
     let mut app = http::router(state);
 
     let (status, body) = post_json(
         &mut app,
         "/v1/host/bootstrap/nonce",
         &[],
-        json!({"installation_id": installation_id}),
+        json!({"device_id": device_id}),
     )
     .await;
 
@@ -56,7 +56,7 @@ async fn host_bootstrap_nonce_issues_for_valid_installation_id() {
 }
 
 #[tokio::test]
-async fn host_bootstrap_nonce_rejects_invalid_installation_id() {
+async fn host_bootstrap_nonce_rejects_invalid_device_id() {
     let state = backend_state().await;
     let mut app = http::router(state);
 
@@ -64,7 +64,7 @@ async fn host_bootstrap_nonce_rejects_invalid_installation_id() {
         &mut app,
         "/v1/host/bootstrap/nonce",
         &[],
-        json!({"installation_id": "not-a-uuid"}),
+        json!({"device_id": "not-a-uuid"}),
     )
     .await;
 
@@ -75,7 +75,7 @@ async fn host_bootstrap_nonce_rejects_invalid_installation_id() {
 async fn retired_qr_pairing_routes_return_404() {
     let state = backend_state().await;
     let mut app = http::router(state);
-    let installation_id = DeviceId::new().to_string();
+    let device_id = DeviceId::new().to_string();
 
     for path in [
         "/v1/host/pairing/request-code",
@@ -89,7 +89,7 @@ async fn retired_qr_pairing_routes_return_404() {
             path,
             &[],
             json!({
-                "installation_id": installation_id,
+                "device_id": device_id,
                 "pairing_code": "dead",
                 "nonce": "nonce_x",
                 "signature": "ed25519-sig:x",

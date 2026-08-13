@@ -160,7 +160,7 @@ async fn auth_realtime_ws_ticket_returns_short_lived_browser_upgrade_token() {
         &mut app,
         "/v1/realtime/ws-ticket",
         &[("authorization", &auth_hdr)],
-        json!({"installation_id": device_id.clone()}),
+        json!({"device_id": device_id.clone()}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body={body}");
@@ -206,7 +206,7 @@ async fn auth_realtime_ws_ticket_rejects_cross_account_device_rebind() {
         &mut app,
         "/v1/realtime/ws-ticket",
         &[("authorization", &auth_hdr)],
-        json!({"installation_id": browser_device_id}),
+        json!({"device_id": browser_device_id}),
     )
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "body={body}");

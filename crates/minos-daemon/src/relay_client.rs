@@ -243,21 +243,21 @@ impl RelayClient {
     ) -> Result<minos_protocol::HostPrepareLinkResponse, MinosError> {
         let nonce = self.inner.http.fetch_bootstrap_nonce().await?;
         Ok(minos_protocol::HostPrepareLinkResponse {
-            installation_id: self.inner.http.device_id().to_string(),
+            device_id: self.inner.http.device_id().to_string(),
             public_key: self.inner.http.host_public_key(),
             nonce,
         })
     }
 
-    /// Sign Host Link proof for the local installation.
+    /// Sign Host Link proof for this Mac's DeviceId.
     pub fn sign_link_proof(
         &self,
-        installation_id: &str,
+        device_id: &str,
         nonce: &str,
     ) -> Result<minos_protocol::HostSignLinkProofResponse, MinosError> {
-        if installation_id != self.inner.http.device_id().to_string() {
+        if device_id != self.inner.http.device_id().to_string() {
             return Err(MinosError::BackendInternal {
-                message: "installation_id does not match this host".into(),
+                message: "device_id does not match this host".into(),
             });
         }
         Ok(minos_protocol::HostSignLinkProofResponse {
@@ -480,6 +480,33 @@ async fn run_dispatch(mut ctx: DispatchCtx, mut shutdown_rx: oneshot::Receiver<(
     let mut attempt: u32 = 0;
     let mut logged_missing_token = false;
     let mut epoch_rx = ctx.credential_epoch.subscribe();
+
+    // Restart-safe host topic resume watermark (memory is only a hot cache).
+    {
+        let host_topic = format!("host:{}", ctx.self_device_id);
+        match ctx.store.get_host_topic_cursor(&host_topic).await {
+            Ok(seq) => {
+                if let Ok(mut guard) = ctx.host_topic_seq.lock() {
+                    *guard = seq;
+                }
+                if seq > 0 {
+                    tracing::info!(
+                        target: "minos_daemon::relay_client",
+                        topic = %host_topic,
+                        resume_after = seq,
+                        "hydrated host topic cursor from SQLite"
+                    );
+                }
+            }
+            Err(error) => {
+                tracing::warn!(
+                    target: "minos_daemon::relay_client",
+                    error = %error,
+                    "failed to hydrate host topic cursor"
+                );
+            }
+        }
+    }
 
     loop {
         let Some(secret) = secret_snapshot_or_reload(&ctx.secret, &ctx.last_error) else {
@@ -969,20 +996,76 @@ async fn route_server_frame(frame: ServerFrame, ctx: &DispatchCtx) {
                         *guard = topic_seq;
                     }
                 }
+                let now_ms = chrono::Utc::now().timestamp_millis();
+                if let Err(error) = ctx
+                    .store
+                    .set_host_topic_cursor(&host_topic, topic_seq, now_ms)
+                    .await
+                {
+                    tracing::warn!(
+                        target: "minos_daemon::relay_client",
+                        error = %error,
+                        topic_seq,
+                        "failed to persist host topic cursor"
+                    );
+                }
             }
             route_durable_event(&kind, &payload, ctx).await;
         }
-        ServerFrame::SnapshotRequired { topic, .. } => {
+        ServerFrame::SnapshotRequired {
+            topic,
+            last_known_seq,
+            retention_floor_seq,
+        } => {
             let host_topic = format!("host:{}", ctx.self_device_id);
             if topic == host_topic {
+                // Real catch-up: resume from retention floor (not 0). Clearing to 0
+                // would re-trigger SnapshotRequired forever when floor > 0.
+                let resume_at = retention_floor_seq.max(0);
                 if let Ok(mut guard) = ctx.host_topic_seq.lock() {
-                    *guard = 0;
+                    *guard = resume_at;
+                }
+                let now_ms = chrono::Utc::now().timestamp_millis();
+                if let Err(error) = ctx
+                    .store
+                    .replace_host_topic_cursor(&host_topic, resume_at, now_ms)
+                    .await
+                {
+                    tracing::warn!(
+                        target: "minos_daemon::relay_client",
+                        error = %error,
+                        "failed to persist SnapshotRequired host cursor"
+                    );
                 }
                 tracing::warn!(
                     target: "minos_daemon::relay_client",
                     topic,
-                    "host topic SnapshotRequired — cursor cleared"
+                    last_known_seq,
+                    retention_floor_seq,
+                    resume_at,
+                    "host topic SnapshotRequired — resume cursor advanced to retention floor"
                 );
+                // Re-subscribe immediately with the floor cursor so catch-up continues
+                // without waiting for the next reconnect cycle.
+                let mut resume_after = HashMap::new();
+                if resume_at > 0 {
+                    resume_after.insert(host_topic.clone(), resume_at);
+                }
+                let subscribe = ClientFrame::Subscribe {
+                    topics: vec![host_topic],
+                    resume_after: if resume_after.is_empty() {
+                        None
+                    } else {
+                        Some(resume_after)
+                    },
+                    client_request_id: None,
+                };
+                if ctx.out_tx.send(subscribe).await.is_err() {
+                    tracing::warn!(
+                        target: "minos_daemon::relay_client",
+                        "failed to enqueue post-SnapshotRequired host subscribe"
+                    );
+                }
             }
         }
         ServerFrame::HostIngestAck {
@@ -1035,16 +1118,28 @@ async fn route_server_frame(frame: ServerFrame, ctx: &DispatchCtx) {
             session,
             lease_expires_at_ms,
         } => {
-            Box::pin(handle_bot_inbox_delivery(
-                ctx,
-                delivery_id,
-                conversation_id,
-                message,
-                bot,
-                session,
-                lease_expires_at_ms,
-            ))
-            .await;
+            // Do not await inject on the dispatch loop — it can fill out_tx and
+            // self-deadlock while this branch holds the only out_rx consumer.
+            let store = Arc::clone(&ctx.store);
+            let out_tx = ctx.out_tx.clone();
+            let rpc_server = ctx.rpc_server.clone();
+            let self_device_id = ctx.self_device_id;
+            tokio::spawn(async move {
+                // Reconstruct a minimal ctx-like bundle via a dedicated helper.
+                Box::pin(handle_bot_inbox_delivery_spawned(
+                    store,
+                    out_tx,
+                    rpc_server,
+                    self_device_id,
+                    delivery_id,
+                    conversation_id,
+                    message,
+                    bot,
+                    session,
+                    lease_expires_at_ms,
+                ))
+                .await;
+            });
         }
         ServerFrame::CancelDelivery { delivery_id } => {
             tracing::info!(
@@ -1165,7 +1260,13 @@ async fn route_durable_event(kind: &str, payload: &Value, ctx: &DispatchCtx) {
             let ack = build_host_command_ack(&command_id, chrono::Utc::now().timestamp_millis());
             let _ = ctx.out_tx.send(ack).await;
 
-            match remember_host_command_start(&ctx.host_command_cache, &command_id).await {
+            match remember_host_command_start(
+                &ctx.host_command_cache,
+                ctx.store.as_ref(),
+                &command_id,
+            )
+            .await
+            {
                 HostCommandRouteAction::Start => {}
                 HostCommandRouteAction::InFlight => return,
                 HostCommandRouteAction::Replay(snapshot) => {
@@ -1183,6 +1284,7 @@ async fn route_durable_event(kind: &str, payload: &Value, ctx: &DispatchCtx) {
 
             let out_tx = ctx.out_tx.clone();
             let host_command_cache = Arc::clone(&ctx.host_command_cache);
+            let store = Arc::clone(&ctx.store);
             tokio::spawn(async move {
                 let result = invoke_host_command(&method, params, &rpc_server).await;
                 let finished_at_ms = chrono::Utc::now().timestamp_millis();
@@ -1192,6 +1294,7 @@ async fn route_durable_event(kind: &str, payload: &Value, ctx: &DispatchCtx) {
                 };
                 remember_host_command_result(
                     &host_command_cache,
+                    store.as_ref(),
                     &command_id,
                     HostCommandResultSnapshot {
                         succeeded,
@@ -1250,10 +1353,50 @@ async fn route_durable_event(kind: &str, payload: &Value, ctx: &DispatchCtx) {
 
 async fn remember_host_command_start(
     cache: &HostCommandCache,
+    store: &crate::store::LocalStore,
     command_id: &str,
 ) -> HostCommandRouteAction {
     if command_id.is_empty() {
         return HostCommandRouteAction::Start;
+    }
+
+    // Durable ledger is restart authority; memory cache is a process-local fast path.
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    match store.begin_host_command(command_id, now_ms).await {
+        Ok(crate::store::host_command_ledger::HostCommandBegin::InFlight) => {
+            let mut entries = cache.lock().await;
+            entries.insert(command_id.to_string(), HostCommandCacheEntry::InFlight);
+            return HostCommandRouteAction::InFlight;
+        }
+        Ok(crate::store::host_command_ledger::HostCommandBegin::Replay {
+            succeeded,
+            result_json,
+            error_json,
+            finished_at_ms,
+        }) => {
+            let snapshot = HostCommandResultSnapshot {
+                succeeded,
+                result: result_json.and_then(|s| serde_json::from_str(&s).ok()),
+                error: error_json.and_then(|s| serde_json::from_str(&s).ok()),
+                finished_at_ms,
+            };
+            let mut entries = cache.lock().await;
+            entries.insert(
+                command_id.to_string(),
+                HostCommandCacheEntry::Completed(snapshot.clone()),
+            );
+            prune_host_command_cache(&mut entries);
+            return HostCommandRouteAction::Replay(snapshot);
+        }
+        Ok(crate::store::host_command_ledger::HostCommandBegin::Start) => {}
+        Err(error) => {
+            tracing::warn!(
+                target: "minos_daemon::relay_client",
+                error = %error,
+                command_id,
+                "host_command_ledger begin failed; falling back to memory cache"
+            );
+        }
     }
 
     let mut entries = cache.lock().await;
@@ -1272,11 +1415,38 @@ async fn remember_host_command_start(
 
 async fn remember_host_command_result(
     cache: &HostCommandCache,
+    store: &crate::store::LocalStore,
     command_id: &str,
     snapshot: HostCommandResultSnapshot,
 ) {
     if command_id.is_empty() {
         return;
+    }
+
+    let result_json = snapshot
+        .result
+        .as_ref()
+        .and_then(|v| serde_json::to_string(v).ok());
+    let error_json = snapshot
+        .error
+        .as_ref()
+        .and_then(|v| serde_json::to_string(v).ok());
+    if let Err(error) = store
+        .complete_host_command(
+            command_id,
+            snapshot.succeeded,
+            result_json.as_deref(),
+            error_json.as_deref(),
+            snapshot.finished_at_ms,
+        )
+        .await
+    {
+        tracing::warn!(
+            target: "minos_daemon::relay_client",
+            error = %error,
+            command_id,
+            "failed to persist host_command_ledger completion"
+        );
     }
 
     let mut entries = cache.lock().await;
@@ -1419,8 +1589,11 @@ fn build_host_command_result(
 
 // ─── Bot mailbox consumer ──────────────────────────────────────────────
 
-async fn handle_bot_inbox_delivery(
-    ctx: &DispatchCtx,
+async fn handle_bot_inbox_delivery_spawned(
+    store: Arc<crate::store::LocalStore>,
+    out_tx: mpsc::Sender<ClientFrame>,
+    rpc_server: Option<Arc<RpcServerImpl>>,
+    _self_device_id: DeviceId,
     delivery_id: String,
     conversation_id: String,
     message: minos_protocol::ChatMessageSummary,
@@ -1441,8 +1614,7 @@ async fn handle_bot_inbox_delivery(
 
     let now_ms = chrono::Utc::now().timestamp_millis();
     let session_hint = session.session_id.as_deref().filter(|s| !s.is_empty());
-    let begin = match ctx
-        .store
+    let begin = match store
         .begin_bot_delivery(
             &delivery_id,
             &conversation_id,
@@ -1460,8 +1632,7 @@ async fn handle_bot_inbox_delivery(
                 error = %error,
                 "bot delivery ledger begin failed"
             );
-            let _ = ctx
-                .out_tx
+            let _ = out_tx
                 .send(ClientFrame::DeliveryRejected {
                     delivery_id,
                     code: "host_ledger_error".into(),
@@ -1482,8 +1653,7 @@ async fn handle_bot_inbox_delivery(
             return;
         }
         BotDeliveryBegin::ReplayAccepted => {
-            let _ = ctx
-                .out_tx
+            let _ = out_tx
                 .send(ClientFrame::DeliveryAccepted {
                     delivery_id: delivery_id.clone(),
                 })
@@ -1491,8 +1661,7 @@ async fn handle_bot_inbox_delivery(
             return;
         }
         BotDeliveryBegin::ReplayRejected => {
-            let _ = ctx
-                .out_tx
+            let _ = out_tx
                 .send(ClientFrame::DeliveryRejected {
                     delivery_id: delivery_id.clone(),
                     code: "already_rejected".into(),
@@ -1503,18 +1672,16 @@ async fn handle_bot_inbox_delivery(
         }
     }
 
-    let Some(rpc_server) = ctx.rpc_server.clone() else {
+    let Some(rpc_server) = rpc_server.clone() else {
         tracing::warn!(
             target: "minos_daemon::relay_client",
             delivery_id = %delivery_id,
             "no rpc_server wired — rejecting BotInboxDelivery"
         );
-        let _ = ctx
-            .store
+        let _ = store
             .mark_bot_delivery_rejected(&delivery_id, "rpc_server not wired", now_ms)
             .await;
-        let _ = ctx
-            .out_tx
+        let _ = out_tx
             .send(ClientFrame::DeliveryRejected {
                 delivery_id,
                 code: "host_not_ready".into(),
@@ -1540,8 +1707,7 @@ async fn handle_bot_inbox_delivery(
     .await;
     match inject {
         Ok(()) => {
-            if let Err(error) = ctx
-                .store
+            if let Err(error) = store
                 .mark_bot_delivery_injected(&delivery_id, session_hint, now_ms)
                 .await
             {
@@ -1557,8 +1723,7 @@ async fn handle_bot_inbox_delivery(
                 delivery_id = %delivery_id,
                 "BotInboxDelivery injected into local session"
             );
-            let _ = ctx
-                .out_tx
+            let _ = out_tx
                 .send(ClientFrame::DeliveryAccepted {
                     delivery_id: delivery_id.clone(),
                 })
@@ -1567,7 +1732,7 @@ async fn handle_bot_inbox_delivery(
         Err((code, detail)) => {
             // Retryable inject failure: clear non-terminal received so Hub requeue
             // can redeliver. Do not mark rejected (that would poison redelivery).
-            let _ = ctx.store.clear_bot_delivery_inflight(&delivery_id).await;
+            let _ = store.clear_bot_delivery_inflight(&delivery_id).await;
             tracing::warn!(
                 target: "minos_daemon::relay_client",
                 delivery_id = %delivery_id,
@@ -1575,8 +1740,7 @@ async fn handle_bot_inbox_delivery(
                 detail = %detail,
                 "BotInboxDelivery inject failed"
             );
-            let _ = ctx
-                .out_tx
+            let _ = out_tx
                 .send(ClientFrame::DeliveryRejected {
                     delivery_id,
                     code,

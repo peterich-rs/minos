@@ -20,12 +20,12 @@ pub async fn daemon_host_prepare_link(
 #[tauri::command]
 pub async fn daemon_host_sign_link_proof(
     state: State<'_, AppState>,
-    installation_id: String,
+    device_id: String,
     nonce: String,
 ) -> Result<HostSignLinkProofDto, String> {
     state
         .daemon
-        .host_sign_link_proof(installation_id, nonce)
+        .host_sign_link_proof(device_id, nonce)
         .await
         .map_err(|e| e.to_string())
 }

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:minos/data/repositories/auth_repository.dart';
+import 'package:minos/data/services/social_cache_store_service.dart';
 import 'package:minos/domain/auth_state.dart';
 import 'package:minos/src/rust/api/minos.dart'
     show
@@ -96,5 +97,7 @@ class AuthController extends _$AuthController {
   /// Dual-session logout: Minos revoke + local wipe + best-effort Supabase.
   Future<void> logout() async {
     await _repository.logout();
+    // Account-scope: drop social cache + im_outbox so drafts cannot send as B.
+    await ref.read(socialCacheStoreProvider).clearAllForLogout();
   }
 }

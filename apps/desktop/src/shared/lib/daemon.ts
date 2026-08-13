@@ -301,13 +301,13 @@ export const daemonApi = {
   /** Silent host bind (D02): prepare identity + bootstrap nonce. */
   hostPrepareLink: () =>
     call<{
-      installationId: string;
+      deviceId: string;
       publicKey: string;
       nonce: string;
     }>("daemon_host_prepare_link"),
-  hostSignLinkProof: (installationId: string, nonce: string) =>
+  hostSignLinkProof: (deviceId: string, nonce: string) =>
     call<{ signature: string }>("daemon_host_sign_link_proof", {
-      installationId,
+      deviceId,
       nonce,
     }),
   hostApplyLinkToken: (hostInstallationToken: string) =>

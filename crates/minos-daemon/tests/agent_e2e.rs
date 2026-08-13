@@ -301,8 +301,7 @@ async fn register_formal_host(
         )
         .await;
     };
-    store::device_installations::set_account_id(&relay.pool, &mobile_id, &account.account_id)
-        .await?;
+    store::devices::set_account_id(&relay.pool, &mobile_id, &account.account_id).await?;
 
     let linked = relay
         .state

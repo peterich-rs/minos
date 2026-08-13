@@ -82,7 +82,7 @@ impl LocalDaemonRpcServer for LocalRpcImpl {
             return Err(host_link_unavailable());
         };
         relay
-            .sign_link_proof(&req.installation_id, &req.nonce)
+            .sign_link_proof(&req.device_id, &req.nonce)
             .map_err(rpc_err)
     }
 

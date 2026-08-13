@@ -75,6 +75,9 @@ pub struct AuthSession {
     pub access_token: String,
     pub refresh_token: String,
     pub expires_in: i64,
+    /// Desktop login: opaque host token bound to `(account_id, device_id)`.
+    /// Other account-client roles leave this unset.
+    pub host_token: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -405,8 +408,16 @@ impl AuthUseCase {
         self.ensure_device_for_account(&device_id, device_role, device_name, &account.account_id)
             .await?;
 
-        self.issue_auth_session(&account.account_id, &account.email, &device_id)
-            .await
+        let mut session = self
+            .issue_auth_session(&account.account_id, &account.email, &device_id)
+            .await?;
+        if device_role == DeviceRole::DesktopConsole {
+            session.host_token = Some(
+                self.issue_desktop_host_token(&device_id, &account.account_id)
+                    .await?,
+            );
+        }
+        Ok(session)
     }
 
     async fn upsert_account_from_supabase(
@@ -515,14 +526,14 @@ impl AuthUseCase {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .unwrap_or("unnamed");
-        let existing = crate::store::device_installations::get_device(&self.store, *device_id)
+        let existing = crate::store::devices::get_device(&self.store, *device_id)
             .await
             .map_err(|error| Self::log_internal("auth.get_device", error))?;
 
         match existing {
             None => {
                 let now = chrono::Utc::now().timestamp_millis();
-                crate::store::device_installations::insert_client_for_account(
+                crate::store::devices::insert_client_for_account(
                     &self.store,
                     *device_id,
                     display_name,
@@ -549,12 +560,8 @@ impl AuthUseCase {
                     .filter(|s| !s.is_empty())
                     .filter(|s| *s != row.display_name.as_str())
                 {
-                    if let Err(error) = crate::store::device_installations::set_display_name(
-                        &self.store,
-                        device_id,
-                        name,
-                    )
-                    .await
+                    if let Err(error) =
+                        crate::store::devices::set_display_name(&self.store, device_id, name).await
                     {
                         tracing::warn!(
                             target: "minos_backend::auth",
@@ -667,16 +674,21 @@ impl AuthUseCase {
     ) -> Result<(), AuthUseCaseError> {
         self.limits.check_refresh_per_account(account_id)?;
 
-        match self.refresh_tokens.find_active(refresh_token).await {
-            Ok(Some(row)) if row.account_id == account_id => {}
+        let device_id = match self.refresh_tokens.find_active(refresh_token).await {
+            Ok(Some(row)) if row.account_id == account_id => row.device_id,
             Ok(Some(_)) | Ok(None) => return Ok(()),
             Err(error) => return Err(Self::log_internal("logout.find_active", error)),
-        }
+        };
 
         self.refresh_tokens
             .revoke_one(refresh_token)
             .await
             .map_err(|error| Self::log_internal("logout.revoke_one", error))?;
+        if let Ok(device_id) = uuid::Uuid::parse_str(&device_id).map(DeviceId) {
+            let now = chrono::Utc::now().timestamp_millis();
+            let _ =
+                crate::store::host_tokens::revoke_all_for_host(&self.store, device_id, now).await;
+        }
         Ok(())
     }
 
@@ -690,7 +702,7 @@ impl AuthUseCase {
             return Err(AuthUseCaseError::UnsupportedWsTicketRole);
         }
 
-        let existing = crate::store::device_installations::get_device(&self.store, device_id)
+        let existing = crate::store::devices::get_device(&self.store, device_id)
             .await
             .map_err(|error| Self::log_internal("ws_ticket.get_device", error))?;
         match existing.as_ref().and_then(|row| row.account_id.as_deref()) {
@@ -718,11 +730,11 @@ impl AuthUseCase {
 
     pub async fn issue_host_ws_ticket(
         &self,
-        host_installation_id: DeviceId,
+        host_device_id: DeviceId,
     ) -> Result<WsTicketSession, AuthUseCaseError> {
         self.issue_tracked_ws_ticket(
-            &host_installation_id.to_string(),
-            host_installation_id,
+            &host_device_id.to_string(),
+            host_device_id,
             DeviceRole::AgentHost,
         )
         .await
@@ -758,13 +770,12 @@ impl AuthUseCase {
         device_id: &DeviceId,
         account_id: &str,
     ) -> Result<(), AuthUseCaseError> {
-        let previous_account_id =
-            crate::store::device_installations::get_device(&self.store, *device_id)
-                .await
-                .map_err(|error| Self::log_internal("bind_device.get_device", error))?
-                .and_then(|device| device.account_id);
+        let previous_account_id = crate::store::devices::get_device(&self.store, *device_id)
+            .await
+            .map_err(|error| Self::log_internal("bind_device.get_device", error))?
+            .and_then(|device| device.account_id);
 
-        crate::store::device_installations::set_account_id(&self.store, device_id, account_id)
+        crate::store::devices::set_account_id(&self.store, device_id, account_id)
             .await
             .map_err(|error| Self::log_internal("bind_device.set_account_id", error))?;
 
@@ -803,7 +814,54 @@ impl AuthUseCase {
             access_token,
             refresh_token,
             expires_in: jwt::ACCESS_TTL_SECS,
+            host_token: None,
         })
+    }
+
+    /// Bind this Desktop DeviceId as the account's Host and mint a host_token.
+    ///
+    /// Signing into Desktop owns this Mac: a prior account's link on the same
+    /// DeviceId is replaced.
+    async fn issue_desktop_host_token(
+        &self,
+        device_id: &DeviceId,
+        account_id: &str,
+    ) -> Result<String, AuthUseCaseError> {
+        let svc = crate::host_link::HostLinkService::new(self.store.clone());
+        match svc
+            .link_host(*device_id, account_id, *device_id, Some("This Mac"))
+            .await
+        {
+            Ok(outcome) => Ok(outcome.host_installation_token),
+            Err(crate::host_link::HostLinkError::HostLinkedElsewhere { .. }) => {
+                let links =
+                    crate::store::host_links::list_accounts_for_host(&self.store, *device_id)
+                        .await
+                        .map_err(|error| Self::log_internal("desktop_host.list_links", error))?;
+                let now = chrono::Utc::now().timestamp_millis();
+                for link in links {
+                    let _ = crate::store::host_links::delete_pair(
+                        &self.store,
+                        link.host_device_id,
+                        &link.mobile_account_id,
+                    )
+                    .await;
+                }
+                let _ =
+                    crate::store::host_tokens::revoke_all_for_host(&self.store, *device_id, now)
+                        .await;
+                svc.link_host(*device_id, account_id, *device_id, Some("This Mac"))
+                    .await
+                    .map(|outcome| outcome.host_installation_token)
+                    .map_err(|error| {
+                        Self::log_internal("desktop_host.relink", format!("{error:?}"))
+                    })
+            }
+            Err(error) => Err(Self::log_internal(
+                "desktop_host.link",
+                format!("{error:?}"),
+            )),
+        }
     }
 
     fn log_internal(operation: &'static str, error: impl std::fmt::Display) -> AuthUseCaseError {

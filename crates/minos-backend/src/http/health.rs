@@ -157,7 +157,11 @@ pub async fn jobs(State(state): State<BackendState>) -> impl IntoResponse {
         session_registry_size: usize,
         runtime_mode: &'static str,
         storage_mode: &'static str,
+        jobs: Vec<crate::jobs::JobHealth>,
     }
+
+    let mut jobs = state.job_health.snapshot();
+    jobs.sort_by(|a, b| a.name.cmp(&b.name));
 
     (
         StatusCode::OK,
@@ -166,6 +170,7 @@ pub async fn jobs(State(state): State<BackendState>) -> impl IntoResponse {
             session_registry_size: state.registry.len(),
             runtime_mode: state.config.runtime_mode.as_str(),
             storage_mode: state.config.storage_mode.as_str(),
+            jobs,
         }),
     )
 }

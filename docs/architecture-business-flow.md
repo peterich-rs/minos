@@ -105,16 +105,15 @@
 
 ### Host 守护进程
 
-1. 调用 `POST /v1/host/realtime/ws-ticket`（HostInstallationPrincipal）→ 获得 ticket
-2. WebSocket 升级: `/ws/host?ticket=<ticket>`
-3. 自动订阅 `host:<installation_id>` topic
-4. 接收 host 命令（start_agent, approval_decision 等）
-5. 回送命令结果: `host_command_ack`, `host_command_result`
-6. Agent 输出上行: 在线发送 `HostIngestLiveBatch`；断线重连后先发送 `HostGapManifest`，历史正文由后端通过 `PullIngestRange` 主动拉取。
+1. 以 Bearer `host_token` 升级 `/ws/host`（无 host ticket）
+2. 自动订阅 `host:<device_id>` topic
+3. 接收 host 命令（start_agent, approval_decision 等）
+4. 回送命令结果: `host_command_ack`, `host_command_result`
+5. Agent 输出上行: 在线发送 `HostIngestLiveBatch`；断线重连后先发送 `HostGapManifest`，历史正文由后端通过 `PullIngestRange` 主动拉取。
 
 ### 连接策略
 
-同一 `(principal, installation_id)` 只保留最新连接；旧连接收到 4401 关闭码。
+同一 `(rail, DeviceId)` 只保留最新连接（Account IM 与 Host runtime 可共享一个 DeviceId）；旧连接收到 4401 关闭码。
 
 ---
 
@@ -153,7 +152,7 @@
 
 1. 调用方可触发 start/send_input（或由 inbox worker 内部调用）
 2. 后端事务：成员校验 → 选 host → `agent_sessions` / turns → durable → `host_commands`
-3. Outbox → `host:{installation_id}` → daemon spawn / 喂入
+3. Outbox → `host:{device_id}` → daemon spawn / 喂入
 
 ### Agent 执行与流式传输
 

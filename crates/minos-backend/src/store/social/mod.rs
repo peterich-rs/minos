@@ -257,7 +257,7 @@ pub use conversation_messages::{
     list_message_mentions, list_message_mentions_full, list_messages, list_messages_by_ids,
     lookup_latest_session_id_for_conversation, lookup_latest_session_id_for_conversation_agent,
     lookup_session_id_for_message, recall_message, recall_message_in_tx,
-    suppress_live_ui_fanout_for_session, InsertMessageOutcome,
+    suppress_live_ui_fanout_for_session, validate_client_message_id, InsertMessageOutcome,
 };
 
 // Agent functions
@@ -836,5 +836,49 @@ mod tests {
             ),
             "expected agent body fingerprint conflict, got {conflict:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn insert_message_rejects_path_escape_client_ids() {
+        let pool = memory_pool().await;
+        let alice = insert_account(&pool, "alice@example.com").await;
+        let conversation = create_group_conversation(&pool, &alice, "Sec", &[], T0)
+            .await
+            .unwrap();
+        for bad in ["../etc/passwd", "/tmp/x", "foo/bar", "has space", ".."] {
+            let err = insert_message_with_id(
+                &pool,
+                &conversation.conversation_id,
+                &alice,
+                "hello",
+                T0 + 1,
+                None,
+                &[],
+                Some(bad),
+            )
+            .await;
+            assert!(
+                matches!(
+                    &err,
+                    Err(crate::error::BackendError::StoreQuery { operation, .. })
+                        if operation == "social::insert_message_with_id.invalid_client_message_id"
+                ),
+                "expected invalid_client_message_id for {bad:?}, got {err:?}"
+            );
+        }
+        // Good ids still accepted.
+        let ok = insert_message_with_id(
+            &pool,
+            &conversation.conversation_id,
+            &alice,
+            "hello",
+            T0 + 2,
+            None,
+            &[],
+            Some("msg_550e8400-e29b-41d4-a716-446655440000"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(ok.message_id, "msg_550e8400-e29b-41d4-a716-446655440000");
     }
 }

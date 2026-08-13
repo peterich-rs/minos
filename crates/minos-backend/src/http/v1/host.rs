@@ -17,7 +17,7 @@ use crate::http::BackendState;
 
 #[derive(Debug, Serialize)]
 struct HostSelfData {
-    host_installation_id: String,
+    host_device_id: String,
     display_name: String,
     link_count: usize,
     links: Vec<HostSelfLinkSummary>,
@@ -25,7 +25,7 @@ struct HostSelfData {
 
 #[derive(Debug, Serialize)]
 struct HostSelfLinkSummary {
-    linked_via_installation_id: String,
+    linked_via_device_id: String,
     link_display_name: String,
     paired_at_ms: i64,
     last_active_at_ms: i64,
@@ -34,7 +34,7 @@ struct HostSelfLinkSummary {
 
 #[derive(Debug, Deserialize)]
 struct BootstrapNonceRequest {
-    installation_id: String,
+    device_id: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -55,18 +55,18 @@ async fn post_bootstrap_nonce(
     headers: HeaderMap,
     Json(req): Json<BootstrapNonceRequest>,
 ) -> Result<Json<ResponseEnvelope<BootstrapNonceData>>, (StatusCode, Json<ErrorEnvelope>)> {
-    if uuid::Uuid::parse_str(&req.installation_id).is_err() {
+    if uuid::Uuid::parse_str(&req.device_id).is_err() {
         return Err((StatusCode::BAD_REQUEST, err("bad_request")));
     }
     let nonce = state
         .bootstrap_nonces
-        .issue(&req.installation_id, chrono::Utc::now().timestamp_millis())
+        .issue(&req.device_id, chrono::Utc::now().timestamp_millis())
         .await
         .map_err(|error| {
             tracing::warn!(
                 target: "minos_backend::v1::host",
                 error = %error,
-                installation_id = %req.installation_id,
+                device_id = %req.device_id,
                 "bootstrap nonce issue failed",
             );
             (StatusCode::INTERNAL_SERVER_ERROR, err("internal"))
@@ -86,64 +86,57 @@ async fn post_installations_self(
     headers: HeaderMap,
 ) -> Result<Json<ResponseEnvelope<HostSelfData>>, (StatusCode, Json<ErrorEnvelope>)> {
     let outcome = require_host(&state, &headers).await?;
-    let host =
-        crate::store::device_installations::get_device(&state.store, outcome.host_installation_id)
-            .await
-            .map_err(|error| {
-                tracing::warn!(
-                    target: "minos_backend::v1::host",
-                    error = %error,
-                    host_installation_id = %outcome.host_installation_id,
-                    "get_device(host) failed",
-                );
-                (StatusCode::INTERNAL_SERVER_ERROR, err("internal"))
-            })?
-            .ok_or_else(|| (StatusCode::UNAUTHORIZED, err("unauthorized")))?;
-
-    let pairs = crate::store::host_links::list_accounts_for_host(
-        &state.store,
-        outcome.host_installation_id,
-    )
-    .await
-    .map_err(|error| {
-        tracing::warn!(
-            target: "minos_backend::v1::host",
-            error = %error,
-            host_installation_id = %outcome.host_installation_id,
-            "list_accounts_for_host failed",
-        );
-        (StatusCode::INTERNAL_SERVER_ERROR, err("internal"))
-    })?;
-
-    let mut links = Vec::with_capacity(pairs.len());
-    for pair in pairs {
-        let mobile =
-            crate::store::device_installations::get_device(&state.store, pair.paired_via_device_id)
-                .await
-                .map_err(|error| {
-                    tracing::warn!(
-                        target: "minos_backend::v1::host",
-                        error = %error,
-                        linked_via_installation_id = %pair.paired_via_device_id,
-                        "get_device(linked_via) failed",
-                    );
-                    (StatusCode::INTERNAL_SERVER_ERROR, err("internal"))
-                })?;
-
-        let latest_mobile = crate::store::device_installations::latest_mobile_for_account(
-            &state.store,
-            &pair.mobile_account_id,
-        )
+    let host = crate::store::devices::get_device(&state.store, outcome.device_id)
         .await
         .map_err(|error| {
             tracing::warn!(
                 target: "minos_backend::v1::host",
                 error = %error,
-                mobile_account_id = %pair.mobile_account_id,
-                "latest_mobile_for_account failed",
+                device_id = %outcome.device_id,
+                "get_device(host) failed",
+            );
+            (StatusCode::INTERNAL_SERVER_ERROR, err("internal"))
+        })?
+        .ok_or_else(|| (StatusCode::UNAUTHORIZED, err("unauthorized")))?;
+
+    let pairs = crate::store::host_links::list_accounts_for_host(&state.store, outcome.device_id)
+        .await
+        .map_err(|error| {
+            tracing::warn!(
+                target: "minos_backend::v1::host",
+                error = %error,
+                device_id = %outcome.device_id,
+                "list_accounts_for_host failed",
             );
             (StatusCode::INTERNAL_SERVER_ERROR, err("internal"))
         })?;
+
+    let mut links = Vec::with_capacity(pairs.len());
+    for pair in pairs {
+        let mobile = crate::store::devices::get_device(&state.store, pair.paired_via_device_id)
+            .await
+            .map_err(|error| {
+                tracing::warn!(
+                    target: "minos_backend::v1::host",
+                    error = %error,
+                    linked_via_device_id = %pair.paired_via_device_id,
+                    "get_device(linked_via) failed",
+                );
+                (StatusCode::INTERNAL_SERVER_ERROR, err("internal"))
+            })?;
+
+        let latest_mobile =
+            crate::store::devices::latest_mobile_for_account(&state.store, &pair.mobile_account_id)
+                .await
+                .map_err(|error| {
+                    tracing::warn!(
+                        target: "minos_backend::v1::host",
+                        error = %error,
+                        mobile_account_id = %pair.mobile_account_id,
+                        "latest_mobile_for_account failed",
+                    );
+                    (StatusCode::INTERNAL_SERVER_ERROR, err("internal"))
+                })?;
 
         let (display_name, last_active_at_ms) = if let Some(row) = mobile {
             let last_active_at_ms = latest_mobile
@@ -153,7 +146,7 @@ async fn post_installations_self(
         } else {
             tracing::warn!(
                 target: "minos_backend::v1::host",
-                linked_via_installation_id = %pair.paired_via_device_id,
+                linked_via_device_id = %pair.paired_via_device_id,
                 "host link references mobile device with no devices row; using placeholder name",
             );
             latest_mobile.map_or_else(
@@ -163,7 +156,7 @@ async fn post_installations_self(
         };
 
         links.push(HostSelfLinkSummary {
-            linked_via_installation_id: pair.paired_via_device_id.to_string(),
+            linked_via_device_id: pair.paired_via_device_id.to_string(),
             link_display_name: display_name,
             paired_at_ms: pair.paired_at_ms,
             last_active_at_ms,
@@ -173,7 +166,7 @@ async fn post_installations_self(
 
     Ok(Json(ResponseEnvelope::new(
         HostSelfData {
-            host_installation_id: outcome.host_installation_id.to_string(),
+            host_device_id: outcome.device_id.to_string(),
             display_name: host.display_name,
             link_count: links.len(),
             links,
@@ -193,7 +186,7 @@ fn is_account_online(state: &BackendState, account_id: &str) -> bool {
 async fn require_host(
     state: &BackendState,
     headers: &HeaderMap,
-) -> Result<host_installation::HostInstallationPrincipal, (StatusCode, Json<ErrorEnvelope>)> {
+) -> Result<host_installation::HostPrincipal, (StatusCode, Json<ErrorEnvelope>)> {
     host_installation::require(state, headers)
         .await
         .map_err(|error| {

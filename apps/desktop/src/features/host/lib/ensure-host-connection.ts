@@ -12,23 +12,23 @@
 
 export type EnsureHostPorts = {
   prepareLink: () => Promise<{
-    installationId: string;
+    deviceId: string;
     publicKey: string;
     nonce: string;
   }>;
   signLinkProof: (
-    installationId: string,
+    deviceId: string,
     nonce: string,
   ) => Promise<{ signature: string }>;
   applyLinkToken: (token: string) => Promise<{ linked: boolean }>;
   registerHost: (input: {
-    installationId: string;
+    deviceId: string;
     nonce: string;
     publicKey: string;
     signature: string;
     hostDisplayName: string;
   }) => Promise<{
-    hostInstallationId: string;
+    hostDeviceId: string;
     hostInstallationToken: string;
     pairId: string;
     accountId: string;
@@ -39,7 +39,7 @@ export type EnsureHostPorts = {
 
 export type EnsureHostSuccess = {
   ok: true;
-  hostInstallationId: string;
+  hostDeviceId: string;
   hostDisplayName: string;
   linkedAtMs: number;
   pairId: string;
@@ -94,7 +94,7 @@ export async function registerHostCredential(
   if (!stillCurrent()) return abortedOutcome();
 
   let prepared: {
-    installationId: string;
+    deviceId: string;
     publicKey: string;
     nonce: string;
   };
@@ -113,7 +113,7 @@ export async function registerHostCredential(
   let signature: string;
   try {
     const signed = await ports.signLinkProof(
-      prepared.installationId,
+      prepared.deviceId,
       prepared.nonce,
     );
     signature = signed.signature;
@@ -130,7 +130,7 @@ export async function registerHostCredential(
   let cloud: Awaited<ReturnType<EnsureHostPorts["registerHost"]>>;
   try {
     cloud = await ports.registerHost({
-      installationId: prepared.installationId,
+      deviceId: prepared.deviceId,
       nonce: prepared.nonce,
       publicKey: prepared.publicKey,
       signature,
@@ -173,7 +173,7 @@ export async function registerHostCredential(
 
   return {
     ok: true,
-    hostInstallationId: cloud.hostInstallationId,
+    hostDeviceId: cloud.hostDeviceId,
     hostDisplayName: cloud.hostDisplayName || displayName,
     linkedAtMs: cloud.linkedAtMs,
     pairId: cloud.pairId,

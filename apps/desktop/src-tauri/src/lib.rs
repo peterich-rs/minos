@@ -1,9 +1,13 @@
 //! Minos desktop shell — Tauri host + local daemon JSON-RPC bridge.
 
+mod account_cloud;
+mod account_realtime;
 mod app_state;
 mod commands;
 mod daemon;
+mod identity;
 mod im_outbox_store;
+mod secure_store;
 mod shutdown;
 mod window_reveal;
 
@@ -102,6 +106,7 @@ pub fn run() {
         .manage(AppState {
             daemon: Arc::clone(&daemon),
             im_outbox: Arc::clone(&im_outbox),
+            account_ws: Arc::new(account_realtime::AccountRealtime::new()),
         })
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -114,6 +119,15 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             app_info,
+            account_device_id,
+            account_load_persisted,
+            account_exchange_supabase,
+            account_refresh_session,
+            account_sign_out,
+            account_ws_start,
+            account_ws_stop,
+            account_ws_subscribe,
+            account_ws_append,
             daemon_connect,
             daemon_status,
             daemon_list_projects,

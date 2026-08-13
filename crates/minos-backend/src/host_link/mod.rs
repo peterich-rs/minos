@@ -1,6 +1,6 @@
 //! Same-account host link service (D02).
 //!
-//! Owns account↔host binding via `host_links` + `host_installation_tokens`.
+//! Owns account↔host binding via `host_links` + `host_tokens`.
 //! QR pairing was removed; this is the only bind path.
 //!
 //! Multi-end roster: every successful link/unlink records `HostLinked` /
@@ -20,15 +20,15 @@ use crate::{
     error::BackendError,
     realtime::{ConnectionRevocation, RealtimeConnectionRegistry},
     store::{
-        durable_event_log, host_installation_tokens, host_links, outbox_events, AsStorePool,
-        StoreHandle, StorePoolRef,
+        durable_event_log, host_links, host_tokens, outbox_events, AsStorePool, StoreHandle,
+        StorePoolRef,
     },
 };
 
 /// Outcome of a successful [`HostLinkService::link_host`].
 #[derive(Debug, Clone)]
 pub struct HostLinkOutcome {
-    pub host_installation_id: DeviceId,
+    pub host_device_id: DeviceId,
     pub host_installation_token: String,
     pub link: host_links::PairRow,
     /// Deterministic durable event id enqueued for account roster fanout.
@@ -53,18 +53,14 @@ fn map_host_link_store_err(error: BackendError) -> HostLinkError {
 
 /// Deterministic HostLinked event id (idempotent re-link same pair_id).
 #[must_use]
-pub fn host_linked_event_id(account_id: &str, host_installation_id: &str, pair_id: &str) -> String {
-    format!("host-linked-{account_id}-{host_installation_id}-{pair_id}")
+pub fn host_linked_event_id(account_id: &str, host_device_id: &str, pair_id: &str) -> String {
+    format!("host-linked-{account_id}-{host_device_id}-{pair_id}")
 }
 
 /// Deterministic HostUnlinked event id (pair_id from pre-delete row).
 #[must_use]
-pub fn host_unlinked_event_id(
-    account_id: &str,
-    host_installation_id: &str,
-    pair_id: &str,
-) -> String {
-    format!("host-unlinked-{account_id}-{host_installation_id}-{pair_id}")
+pub fn host_unlinked_event_id(account_id: &str, host_device_id: &str, pair_id: &str) -> String {
+    format!("host-unlinked-{account_id}-{host_device_id}-{pair_id}")
 }
 
 /// Idempotent on deterministic `event_id`: same-account re-link keeps token
@@ -138,15 +134,15 @@ impl HostLinkService {
     ///
     /// Rejects hosts already linked to a different account (`HostLinkedElsewhere`).
     /// Exclusivity is checked **inside** the write transaction (with
-    /// `UNIQUE (host_installation_id)` as belt-and-suspenders). Re-linking the
+    /// `UNIQUE (host_device_id)` as belt-and-suspenders). Re-linking the
     /// same account rotates tokens (revoke all then issue a fresh `hit_*`).
     ///
     /// On success, records `DurableEvent::HostLinked` + outbox in the same tx.
     pub async fn link_host(
         &self,
-        host_installation_id: DeviceId,
+        host_device_id: DeviceId,
         account_id: &str,
-        linked_via_installation_id: DeviceId,
+        linked_via_device_id: DeviceId,
         host_display_name: Option<&str>,
     ) -> Result<HostLinkOutcome, HostLinkError> {
         let now = Utc::now().timestamp_millis();
@@ -162,49 +158,43 @@ impl HostLinkService {
                 })?;
                 host_links::assert_host_available_or_same_account_sqlite(
                     &mut *raw_tx,
-                    host_installation_id,
+                    host_device_id,
                     account_id,
                 )
                 .await
                 .map_err(map_host_link_store_err)?;
                 let link = host_links::upsert_link_with_executor(
                     &mut *raw_tx,
-                    host_installation_id,
+                    host_device_id,
                     account_id,
-                    linked_via_installation_id,
+                    linked_via_device_id,
                     host_display_name,
                     now,
                 )
                 .await
                 .map_err(map_host_link_store_err)?;
-                host_installation_tokens::revoke_all_for_host_with_executor(
-                    &mut *raw_tx,
-                    host_installation_id,
-                    now,
-                )
-                .await
-                .map_err(HostLinkError::Internal)?;
-                host_installation_tokens::insert_token_with_executor(
+                host_tokens::revoke_all_for_host_with_executor(&mut *raw_tx, host_device_id, now)
+                    .await
+                    .map_err(HostLinkError::Internal)?;
+                host_tokens::insert_token_with_executor(
                     &mut *raw_tx,
                     &token_hash,
-                    host_installation_id,
+                    host_device_id,
+                    Some(account_id),
                     now,
                 )
                 .await
                 .map_err(HostLinkError::Internal)?;
 
-                let event_id = host_linked_event_id(
-                    account_id,
-                    &host_installation_id.to_string(),
-                    &link.pair_id,
-                );
+                let event_id =
+                    host_linked_event_id(account_id, &host_device_id.to_string(), &link.pair_id);
                 let display = link
                     .link_display_name
                     .clone()
                     .or_else(|| host_display_name.map(str::to_string));
                 let event = DurableEvent::HostLinked {
                     account_id: account_id.to_string(),
-                    host_installation_id: host_installation_id.to_string(),
+                    host_device_id: host_device_id.to_string(),
                     pair_id: link.pair_id.clone(),
                     at_ms: now,
                     host_display_name: display,
@@ -222,49 +212,47 @@ impl HostLinkService {
                     .map_err(HostLinkError::Internal)?;
                 host_links::assert_host_available_or_same_account_postgres(
                     &mut *raw_tx,
-                    host_installation_id,
+                    host_device_id,
                     account_id,
                 )
                 .await
                 .map_err(map_host_link_store_err)?;
                 let link = host_links::upsert_link_with_postgres_executor(
                     &mut *raw_tx,
-                    host_installation_id,
+                    host_device_id,
                     account_id,
-                    linked_via_installation_id,
+                    linked_via_device_id,
                     host_display_name,
                     now,
                 )
                 .await
                 .map_err(map_host_link_store_err)?;
-                host_installation_tokens::revoke_all_for_host_with_postgres_executor(
+                host_tokens::revoke_all_for_host_with_postgres_executor(
                     &mut *raw_tx,
-                    host_installation_id,
+                    host_device_id,
                     now,
                 )
                 .await
                 .map_err(HostLinkError::Internal)?;
-                host_installation_tokens::insert_token_with_postgres_executor(
+                host_tokens::insert_token_with_postgres_executor(
                     &mut *raw_tx,
                     &token_hash,
-                    host_installation_id,
+                    host_device_id,
+                    Some(account_id),
                     now,
                 )
                 .await
                 .map_err(HostLinkError::Internal)?;
 
-                let event_id = host_linked_event_id(
-                    account_id,
-                    &host_installation_id.to_string(),
-                    &link.pair_id,
-                );
+                let event_id =
+                    host_linked_event_id(account_id, &host_device_id.to_string(), &link.pair_id);
                 let display = link
                     .link_display_name
                     .clone()
                     .or_else(|| host_display_name.map(str::to_string));
                 let event = DurableEvent::HostLinked {
                     account_id: account_id.to_string(),
-                    host_installation_id: host_installation_id.to_string(),
+                    host_device_id: host_device_id.to_string(),
                     pair_id: link.pair_id.clone(),
                     at_ms: now,
                     host_display_name: display,
@@ -278,11 +266,11 @@ impl HostLinkService {
             }
         };
 
-        let _ = crate::ingest::invalidate_peer_targets_for_host(host_installation_id).await;
+        let _ = crate::ingest::invalidate_peer_targets_for_host(host_device_id).await;
         let _ = crate::ingest::invalidate_peer_targets_for_account(&self.pool, account_id).await;
 
         Ok(HostLinkOutcome {
-            host_installation_id,
+            host_device_id,
             host_installation_token: token,
             link,
             durable_event_id,
@@ -297,7 +285,7 @@ impl HostLinkService {
     pub async fn unlink_host(
         &self,
         registry: &RealtimeConnectionRegistry,
-        host_installation_id: DeviceId,
+        host_device_id: DeviceId,
         account_id: &str,
     ) -> Result<String, HostLinkError> {
         let now = Utc::now().timestamp_millis();
@@ -309,42 +297,32 @@ impl HostLinkService {
                         message: e.to_string(),
                     })
                 })?;
-                let existing = host_links::get_pair_with_executor(
-                    &mut *raw_tx,
-                    host_installation_id,
-                    account_id,
-                )
-                .await
-                .map_err(HostLinkError::Internal)?;
+                let existing =
+                    host_links::get_pair_with_executor(&mut *raw_tx, host_device_id, account_id)
+                        .await
+                        .map_err(HostLinkError::Internal)?;
                 let Some(existing) = existing else {
                     return Err(HostLinkError::NotFound);
                 };
-                let deleted = host_links::delete_pair_with_executor(
-                    &mut *raw_tx,
-                    host_installation_id,
-                    account_id,
-                )
-                .await
-                .map_err(HostLinkError::Internal)?;
+                let deleted =
+                    host_links::delete_pair_with_executor(&mut *raw_tx, host_device_id, account_id)
+                        .await
+                        .map_err(HostLinkError::Internal)?;
                 if deleted == 0 {
                     return Err(HostLinkError::NotFound);
                 }
-                host_installation_tokens::revoke_all_for_host_with_executor(
-                    &mut *raw_tx,
-                    host_installation_id,
-                    now,
-                )
-                .await
-                .map_err(HostLinkError::Internal)?;
+                host_tokens::revoke_all_for_host_with_executor(&mut *raw_tx, host_device_id, now)
+                    .await
+                    .map_err(HostLinkError::Internal)?;
 
                 let event_id = host_unlinked_event_id(
                     account_id,
-                    &host_installation_id.to_string(),
+                    &host_device_id.to_string(),
                     &existing.pair_id,
                 );
                 let event = DurableEvent::HostUnlinked {
                     account_id: account_id.to_string(),
-                    host_installation_id: host_installation_id.to_string(),
+                    host_device_id: host_device_id.to_string(),
                     at_ms: now,
                 };
                 let mut db_tx = DbTx::Sqlite(raw_tx);
@@ -360,7 +338,7 @@ impl HostLinkService {
                     .map_err(HostLinkError::Internal)?;
                 let existing = host_links::get_pair_with_postgres_executor(
                     &mut *raw_tx,
-                    host_installation_id,
+                    host_device_id,
                     account_id,
                 )
                 .await
@@ -370,7 +348,7 @@ impl HostLinkService {
                 };
                 let deleted = host_links::delete_pair_with_postgres_executor(
                     &mut *raw_tx,
-                    host_installation_id,
+                    host_device_id,
                     account_id,
                 )
                 .await
@@ -378,9 +356,9 @@ impl HostLinkService {
                 if deleted == 0 {
                     return Err(HostLinkError::NotFound);
                 }
-                host_installation_tokens::revoke_all_for_host_with_postgres_executor(
+                host_tokens::revoke_all_for_host_with_postgres_executor(
                     &mut *raw_tx,
-                    host_installation_id,
+                    host_device_id,
                     now,
                 )
                 .await
@@ -388,12 +366,12 @@ impl HostLinkService {
 
                 let event_id = host_unlinked_event_id(
                     account_id,
-                    &host_installation_id.to_string(),
+                    &host_device_id.to_string(),
                     &existing.pair_id,
                 );
                 let event = DurableEvent::HostUnlinked {
                     account_id: account_id.to_string(),
-                    host_installation_id: host_installation_id.to_string(),
+                    host_device_id: host_device_id.to_string(),
                     at_ms: now,
                 };
                 let mut db_tx = DbTx::Postgres(raw_tx);
@@ -405,9 +383,9 @@ impl HostLinkService {
             }
         };
 
-        let _ = crate::ingest::invalidate_peer_targets_for_host(host_installation_id).await;
+        let _ = crate::ingest::invalidate_peer_targets_for_host(host_device_id).await;
         let _ = crate::ingest::invalidate_peer_targets_for_account(&self.pool, account_id).await;
-        let _ = registry.revoke_device(host_installation_id, ConnectionRevocation::AuthRevoked);
+        let _ = registry.revoke_device(host_device_id, ConnectionRevocation::AuthRevoked);
         Ok(durable_event_id)
     }
 }

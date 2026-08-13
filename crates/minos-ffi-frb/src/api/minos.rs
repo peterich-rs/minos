@@ -580,8 +580,9 @@ impl MobileClient {
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::warn!(skipped = n, "ui_events_stream lagged");
-                        break;
+                        // Continue: breaking kills the FRB stream for process lifetime.
+                        tracing::warn!(skipped = n, "ui_events_stream lagged; continuing");
+                        continue;
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
@@ -601,8 +602,9 @@ impl MobileClient {
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::warn!(skipped = n, "social_events_stream lagged");
-                        break;
+                        // Continue: breaking kills social realtime for process lifetime.
+                        tracing::warn!(skipped = n, "social_events_stream lagged; continuing");
+                        continue;
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }

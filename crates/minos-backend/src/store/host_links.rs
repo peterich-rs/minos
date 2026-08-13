@@ -1,8 +1,8 @@
 //! Persistence for `host_links` (account ↔ host installation).
 //!
-//! Pair model is `(account_id, host_installation_id)`. The client
+//! Pair model is `(account_id, host_device_id)`. The client
 //! installation that performed the link is recorded as
-//! `linked_via_installation_id` for audit only — it does not participate in
+//! `linked_via_device_id` for audit only — it does not participate in
 //! routing.
 //!
 //! Field names on [`PairRow`] keep historical `host_device_id` /
@@ -32,7 +32,7 @@ pub struct PairRow {
 
 /// Upsert a host link and return the resulting row.
 ///
-/// On conflict `host_installation_id` (exclusive ownership) refreshes
+/// On conflict `host_device_id` (exclusive ownership) refreshes
 /// metadata **only** when the existing row belongs to the same account.
 /// Returns [`BackendError::HostLinkedElsewhere`] when the host is already
 /// bound to a different account (empty RETURNING after conflict WHERE).
@@ -91,16 +91,16 @@ where
     let row = sqlx::query_as::<_, PairRowTuple>(
         r#"
         INSERT INTO host_links
-            (pair_id, account_id, host_installation_id, linked_via_installation_id,
+            (pair_id, account_id, host_device_id, linked_via_device_id,
              link_display_name, acl_json, paired_at_ms)
         VALUES (?, ?, ?, ?, ?, '{}', ?)
-        ON CONFLICT (host_installation_id) DO UPDATE SET
-            linked_via_installation_id = excluded.linked_via_installation_id,
+        ON CONFLICT (host_device_id) DO UPDATE SET
+            linked_via_device_id = excluded.linked_via_device_id,
             link_display_name = excluded.link_display_name,
             paired_at_ms = excluded.paired_at_ms
         WHERE host_links.account_id = excluded.account_id
-        RETURNING pair_id, host_installation_id, account_id,
-                  linked_via_installation_id, link_display_name, paired_at_ms
+        RETURNING pair_id, host_device_id, account_id,
+                  linked_via_device_id, link_display_name, paired_at_ms
         "#,
     )
     .bind(&pair_id)
@@ -114,7 +114,7 @@ where
     .map_err(|e| map_host_link_write_error("host_links::upsert_link", e))?;
     let Some(row) = row else {
         return Err(BackendError::HostLinkedElsewhere {
-            host_installation_id: host_s,
+            host_device_id: host_s,
         });
     };
     decode_pair_row(row)
@@ -137,16 +137,16 @@ where
     let row = sqlx::query_as::<_, PairRowTuple>(
         r#"
         INSERT INTO host_links
-            (pair_id, account_id, host_installation_id, linked_via_installation_id,
+            (pair_id, account_id, host_device_id, linked_via_device_id,
              link_display_name, acl_json, paired_at_ms)
         VALUES ($1, $2, $3, $4, $5, '{}'::jsonb, $6)
-        ON CONFLICT (host_installation_id) DO UPDATE SET
-            linked_via_installation_id = EXCLUDED.linked_via_installation_id,
+        ON CONFLICT (host_device_id) DO UPDATE SET
+            linked_via_device_id = EXCLUDED.linked_via_device_id,
             link_display_name = EXCLUDED.link_display_name,
             paired_at_ms = EXCLUDED.paired_at_ms
         WHERE host_links.account_id = EXCLUDED.account_id
-        RETURNING pair_id, host_installation_id, account_id,
-                  linked_via_installation_id, link_display_name, paired_at_ms
+        RETURNING pair_id, host_device_id, account_id,
+                  linked_via_device_id, link_display_name, paired_at_ms
         "#,
     )
     .bind(&pair_id)
@@ -160,7 +160,7 @@ where
     .map_err(|e| map_host_link_write_error("host_links::upsert_link", e))?;
     let Some(row) = row else {
         return Err(BackendError::HostLinkedElsewhere {
-            host_installation_id: host_s,
+            host_device_id: host_s,
         });
     };
     decode_pair_row(row)
@@ -180,7 +180,7 @@ where
         r#"
         SELECT account_id
         FROM host_links
-        WHERE host_installation_id = ?
+        WHERE host_device_id = ?
         LIMIT 1
         "#,
     )
@@ -194,7 +194,7 @@ where
     if let Some(owner) = existing {
         if owner != account_id {
             return Err(BackendError::HostLinkedElsewhere {
-                host_installation_id: host_s,
+                host_device_id: host_s,
             });
         }
     }
@@ -215,7 +215,7 @@ where
         r#"
         SELECT account_id
         FROM host_links
-        WHERE host_installation_id = $1
+        WHERE host_device_id = $1
         LIMIT 1
         FOR UPDATE
         "#,
@@ -230,7 +230,7 @@ where
     if let Some(owner) = existing {
         if owner != account_id {
             return Err(BackendError::HostLinkedElsewhere {
-                host_installation_id: host_s,
+                host_device_id: host_s,
             });
         }
     }
@@ -241,7 +241,7 @@ fn map_host_link_write_error(operation: &str, error: sqlx::Error) -> BackendErro
     if let sqlx::Error::Database(db) = &error {
         if db.is_unique_violation() {
             return BackendError::HostLinkedElsewhere {
-                host_installation_id: String::new(),
+                host_device_id: String::new(),
             };
         }
     }
@@ -347,10 +347,10 @@ where
     let res = sqlx::query(
         r#"
         INSERT INTO host_links
-            (pair_id, account_id, host_installation_id, linked_via_installation_id,
+            (pair_id, account_id, host_device_id, linked_via_device_id,
              link_display_name, acl_json, paired_at_ms)
         VALUES (?, ?, ?, ?, NULL, '{}', ?)
-        ON CONFLICT (host_installation_id) DO NOTHING
+        ON CONFLICT (host_device_id) DO NOTHING
         "#,
     )
     .bind(&pair_id)
@@ -380,10 +380,10 @@ where
     let res = sqlx::query(
         r#"
         INSERT INTO host_links
-            (pair_id, account_id, host_installation_id, linked_via_installation_id,
+            (pair_id, account_id, host_device_id, linked_via_device_id,
              link_display_name, acl_json, paired_at_ms)
         VALUES ($1, $2, $3, $4, NULL, '{}'::jsonb, $5)
-        ON CONFLICT (host_installation_id) DO NOTHING
+        ON CONFLICT (host_device_id) DO NOTHING
         "#,
     )
     .bind(&pair_id)
@@ -406,8 +406,8 @@ pub async fn list_hosts_for_account(
         StorePoolRef::Sqlite(pool) => {
             sqlx::query_as::<_, PairRowTuple>(
                 r#"
-                SELECT pair_id, host_installation_id, account_id,
-                       linked_via_installation_id, link_display_name, paired_at_ms
+                SELECT pair_id, host_device_id, account_id,
+                       linked_via_device_id, link_display_name, paired_at_ms
                 FROM host_links
                 WHERE account_id = ?
                 ORDER BY paired_at_ms DESC
@@ -420,8 +420,8 @@ pub async fn list_hosts_for_account(
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, PairRowTuple>(
                 r#"
-                SELECT pair_id, host_installation_id, account_id,
-                       linked_via_installation_id, link_display_name, paired_at_ms
+                SELECT pair_id, host_device_id, account_id,
+                       linked_via_device_id, link_display_name, paired_at_ms
                 FROM host_links
                 WHERE account_id = $1
                 ORDER BY paired_at_ms DESC
@@ -449,10 +449,10 @@ pub async fn list_accounts_for_host(
         StorePoolRef::Sqlite(pool) => {
             sqlx::query_as::<_, PairRowTuple>(
                 r#"
-                SELECT pair_id, host_installation_id, account_id,
-                       linked_via_installation_id, link_display_name, paired_at_ms
+                SELECT pair_id, host_device_id, account_id,
+                       linked_via_device_id, link_display_name, paired_at_ms
                 FROM host_links
-                WHERE host_installation_id = ?
+                WHERE host_device_id = ?
                 ORDER BY paired_at_ms DESC
                 "#,
             )
@@ -463,10 +463,10 @@ pub async fn list_accounts_for_host(
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, PairRowTuple>(
                 r#"
-                SELECT pair_id, host_installation_id, account_id,
-                       linked_via_installation_id, link_display_name, paired_at_ms
+                SELECT pair_id, host_device_id, account_id,
+                       linked_via_device_id, link_display_name, paired_at_ms
                 FROM host_links
-                WHERE host_installation_id = $1
+                WHERE host_device_id = $1
                 ORDER BY paired_at_ms DESC
                 "#,
             )
@@ -488,20 +488,20 @@ pub async fn list_account_client_targets_for_host(
     host_device_id: DeviceId,
 ) -> Result<Vec<DeviceId>, BackendError> {
     let host_s = host_device_id.to_string();
-    let mobile = DeviceRole::MobileClient.to_installation_kind();
-    let browser = DeviceRole::BrowserAdmin.to_installation_kind();
-    let desktop = DeviceRole::DesktopConsole.to_installation_kind();
+    let mobile = DeviceRole::MobileClient.to_device_kind();
+    let browser = DeviceRole::BrowserAdmin.to_device_kind();
+    let desktop = DeviceRole::DesktopConsole.to_device_kind();
     let rows = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
             sqlx::query_scalar::<_, String>(
                 r#"
-                SELECT DISTINCT d.installation_id
+                SELECT DISTINCT d.device_id
                 FROM host_links hl
-                JOIN device_installations d
+                JOIN devices d
                   ON d.account_id = hl.account_id
-                WHERE hl.host_installation_id = ?
+                WHERE hl.host_device_id = ?
                   AND d.kind IN (?, ?, ?)
-                ORDER BY d.installation_id ASC
+                ORDER BY d.device_id ASC
                 "#,
             )
             .bind(&host_s)
@@ -514,17 +514,17 @@ pub async fn list_account_client_targets_for_host(
         StorePoolRef::Postgres(pool) => {
             sqlx::query_scalar::<_, String>(
                 r#"
-                SELECT DISTINCT d.installation_id
+                SELECT DISTINCT d.device_id
                 FROM host_links hl
-                JOIN device_installations d
+                JOIN devices d
                   ON d.account_id = hl.account_id
-                WHERE hl.host_installation_id = $1
+                WHERE hl.host_device_id = $1
                   AND d.kind IN (
-                      $2::installation_kind,
-                      $3::installation_kind,
-                      $4::installation_kind
+                      $2::device_kind,
+                      $3::device_kind,
+                      $4::device_kind
                   )
-                ORDER BY d.installation_id ASC
+                ORDER BY d.device_id ASC
                 "#,
             )
             .bind(&host_s)
@@ -540,7 +540,7 @@ pub async fn list_account_client_targets_for_host(
         message: e.to_string(),
     })?;
     rows.into_iter()
-        .map(|raw| parse_device_id(&raw, "installation_id"))
+        .map(|raw| parse_device_id(&raw, "device_id"))
         .collect()
 }
 
@@ -556,10 +556,10 @@ where
     let host_s = host_device_id.to_string();
     let row = sqlx::query_as::<_, PairRowTuple>(
         r#"
-        SELECT pair_id, host_installation_id, account_id,
-               linked_via_installation_id, link_display_name, paired_at_ms
+        SELECT pair_id, host_device_id, account_id,
+               linked_via_device_id, link_display_name, paired_at_ms
         FROM host_links
-        WHERE host_installation_id = ? AND account_id = ?
+        WHERE host_device_id = ? AND account_id = ?
         "#,
     )
     .bind(&host_s)
@@ -584,10 +584,10 @@ where
     let host_s = host_device_id.to_string();
     let row = sqlx::query_as::<_, PairRowTuple>(
         r#"
-        SELECT pair_id, host_installation_id, account_id,
-               linked_via_installation_id, link_display_name, paired_at_ms
+        SELECT pair_id, host_device_id, account_id,
+               linked_via_device_id, link_display_name, paired_at_ms
         FROM host_links
-        WHERE host_installation_id = $1 AND account_id = $2
+        WHERE host_device_id = $1 AND account_id = $2
         "#,
     )
     .bind(&host_s)
@@ -614,7 +614,7 @@ pub async fn exists(
                 r#"
                 SELECT pair_id
                 FROM host_links
-                WHERE host_installation_id = ? AND account_id = ?
+                WHERE host_device_id = ? AND account_id = ?
                 LIMIT 1
                 "#,
             )
@@ -628,7 +628,7 @@ pub async fn exists(
                 r#"
                 SELECT pair_id
                 FROM host_links
-                WHERE host_installation_id = $1 AND account_id = $2
+                WHERE host_device_id = $1 AND account_id = $2
                 LIMIT 1
                 "#,
             )
@@ -673,7 +673,7 @@ where
     let res = sqlx::query(
         r#"
         DELETE FROM host_links
-        WHERE host_installation_id = ? AND account_id = ?
+        WHERE host_device_id = ? AND account_id = ?
         "#,
     )
     .bind(&host_s)
@@ -699,7 +699,7 @@ where
     let res = sqlx::query(
         r#"
         DELETE FROM host_links
-        WHERE host_installation_id = $1 AND account_id = $2
+        WHERE host_device_id = $1 AND account_id = $2
         "#,
     )
     .bind(&host_s)
@@ -724,9 +724,9 @@ fn decode_pair_row(row: PairRowTuple) -> Result<PairRow, BackendError> {
     ) = row;
     Ok(PairRow {
         pair_id,
-        host_device_id: parse_device_id(&host_device_id, "host_installation_id")?,
+        host_device_id: parse_device_id(&host_device_id, "host_device_id")?,
         mobile_account_id,
-        paired_via_device_id: parse_device_id(&paired_via_device_id, "linked_via_installation_id")?,
+        paired_via_device_id: parse_device_id(&paired_via_device_id, "linked_via_device_id")?,
         link_display_name,
         paired_at_ms,
     })

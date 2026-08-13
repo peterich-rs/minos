@@ -1,11 +1,29 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { cloudClientWsUrl } from "./minos-cloud.ts";
 import {
   advanceTopicCursor,
   resumeAfterFromCursors,
   conversationTopic,
 } from "./cloud-cursors.ts";
+
+function cloudClientWsUrl(gatewayUrl: string, ticket: string): string {
+  const httpBase = "http://127.0.0.1:8787";
+  let pathOrUrl = gatewayUrl.trim();
+  if (pathOrUrl.startsWith("/")) {
+    const origin = httpBase.replace(/^https:/i, "wss:").replace(/^http:/i, "ws:");
+    pathOrUrl = `${origin.replace(/\/+$/, "")}${pathOrUrl}`;
+  } else if (pathOrUrl.startsWith("https://")) {
+    pathOrUrl = `wss://${pathOrUrl.slice("https://".length)}`;
+  } else if (pathOrUrl.startsWith("http://")) {
+    pathOrUrl = `ws://${pathOrUrl.slice("http://".length)}`;
+  }
+  if (!/[?&]ticket=/.test(pathOrUrl)) {
+    const sep = pathOrUrl.includes("?") ? "&" : "?";
+    pathOrUrl = `${pathOrUrl}${sep}ticket=${encodeURIComponent(ticket)}`;
+  }
+  return pathOrUrl;
+}
+
 describe("cloudClientWsUrl", () => {
   it("resolves relative gateway path against backend base", () => {
     // backendHttpBase defaults to 127.0.0.1:8787 in tests without env.

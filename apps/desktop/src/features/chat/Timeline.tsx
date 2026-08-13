@@ -23,6 +23,9 @@ export function Timeline({ conversationId }: { conversationId: string }) {
   );
   const loadTimeline = useWorkspaceStore((s) => s.loadTimeline);
   const markConversationRead = useWorkspaceStore((s) => s.markConversationRead);
+  const clearFocusedConversation = useWorkspaceStore(
+    (s) => s.clearFocusedConversation,
+  );
   const refreshConversationGitStatus = useWorkspaceStore(
     (s) => s.refreshConversationGitStatus,
   );
@@ -41,9 +44,18 @@ export function Timeline({ conversationId }: { conversationId: string }) {
   const errorRecoveryGenRef = useRef<number | null>(null);
 
   // Open/select path: set focus + clear unread (not loadTimeline's job).
+  // Clear focus on unmount / navigate away so background digests stop auto mark-read.
   useEffect(() => {
     markConversationRead(conversationId);
-  }, [conversationId, markConversationRead, bootEpoch]);
+    return () => {
+      clearFocusedConversation(conversationId);
+    };
+  }, [
+    conversationId,
+    markConversationRead,
+    clearFocusedConversation,
+    bootEpoch,
+  ]);
 
   // Init: hydrate Timeline only (messages). Inspector hydrates independently when
   // details panel opens or @-mention needs sessions.

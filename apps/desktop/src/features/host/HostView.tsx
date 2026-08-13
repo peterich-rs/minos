@@ -422,7 +422,7 @@ export function HostView() {
                 />
                 <Row
                   label="Host id"
-                  value={hostBind.hostInstallationId ?? "—"}
+                  value={hostBind.hostDeviceId ?? "—"}
                   mono
                 />
                 <Row label="Hub online" value={String(!!connection?.cloudOnline)} mono />

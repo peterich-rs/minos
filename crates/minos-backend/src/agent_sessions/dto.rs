@@ -14,7 +14,7 @@ pub struct StartAgentSessionInput {
     pub conversation_id: String,
     pub project_id: Option<String>,
     pub agent_id: String,
-    pub host_installation_id: Option<String>,
+    pub host_device_id: Option<String>,
     pub workspace_path: Option<String>,
     pub initial_user_message: Option<String>,
     /// User Hub message id that triggered this turn (frozen agent-result suffix).
@@ -31,7 +31,7 @@ pub struct StartAgentSessionInput {
 pub struct StartAgentSessionOutput {
     pub session_id: String,
     pub conversation_id: String,
-    pub host_installation_id: String,
+    pub host_device_id: String,
     pub started_at_ms: i64,
     pub initial_turn_id: Option<String>,
     pub host_command_id: String,

@@ -60,11 +60,11 @@ fn public_key(signing_key: &SigningKey) -> String {
 
 fn signature_for_path(
     signing_key: &SigningKey,
-    installation_id: &str,
+    device_id: &str,
     nonce: &str,
     path: &str,
 ) -> String {
-    let payload = format!("{installation_id}:{nonce}:{path}");
+    let payload = format!("{device_id}:{nonce}:{path}");
     format!(
         "ed25519-sig:{}",
         URL_SAFE_NO_PAD.encode(signing_key.sign(payload.as_bytes()).to_bytes())
@@ -119,10 +119,10 @@ async fn formally_paired_host(relay: &Relay) -> anyhow::Result<FormalHostFixture
         )
         .await;
     };
-    store::device_installations::set_account_id(&relay.pool, &desktop, &account_id).await?;
+    store::devices::set_account_id(&relay.pool, &desktop, &account_id).await?;
 
     let host = DeviceId::new();
-    let installation_id = host.to_string();
+    let device_id = host.to_string();
     let signing_key = signing_key(31);
     let host_public_key = public_key(&signing_key);
 
@@ -130,12 +130,12 @@ async fn formally_paired_host(relay: &Relay) -> anyhow::Result<FormalHostFixture
         &mut app,
         "/v1/host/bootstrap/nonce",
         &[],
-        json!({"installation_id": installation_id}),
+        json!({"device_id": device_id}),
     )
     .await;
     anyhow::ensure!(status == StatusCode::OK, "nonce body={body}");
     let nonce = body["data"]["nonce"].as_str().unwrap().to_string();
-    let signature = signature_for_path(&signing_key, &installation_id, &nonce, LINK_PATH);
+    let signature = signature_for_path(&signing_key, &device_id, &nonce, LINK_PATH);
 
     let bearer = jwt::sign(
         TEST_JWT_SECRET.as_bytes(),
@@ -149,7 +149,7 @@ async fn formally_paired_host(relay: &Relay) -> anyhow::Result<FormalHostFixture
         "/v1/hosts/link",
         &[("authorization", &account_auth_header)],
         json!({
-            "installation_id": installation_id,
+            "device_id": device_id,
             "nonce": nonce,
             "public_key": host_public_key,
             "signature": signature,
@@ -526,7 +526,7 @@ async fn ws_client_accepts_browser_admin_legacy_ws_ticket_query_auth() -> anyhow
         )
         .await;
     };
-    store::device_installations::set_account_id(&relay.pool, &browser_id, &account_id).await?;
+    store::devices::set_account_id(&relay.pool, &browser_id, &account_id).await?;
 
     let ticket =
         issue_client_ws_ticket(&relay, &account_id, browser_id, DeviceRole::BrowserAdmin).await?;
@@ -565,7 +565,7 @@ async fn ws_client_accepts_formal_ticket_query_auth() -> anyhow::Result<()> {
         )
         .await;
     };
-    store::device_installations::set_account_id(&relay.pool, &browser_id, &account_id).await?;
+    store::devices::set_account_id(&relay.pool, &browser_id, &account_id).await?;
 
     let ticket =
         issue_client_ws_ticket(&relay, &account_id, browser_id, DeviceRole::BrowserAdmin).await?;
@@ -604,7 +604,7 @@ async fn ws_client_rejects_reused_formal_ticket() -> anyhow::Result<()> {
         )
         .await;
     };
-    store::device_installations::set_account_id(&relay.pool, &browser_id, &account_id).await?;
+    store::devices::set_account_id(&relay.pool, &browser_id, &account_id).await?;
 
     let ticket =
         issue_client_ws_ticket(&relay, &account_id, browser_id, DeviceRole::BrowserAdmin).await?;
@@ -697,7 +697,7 @@ async fn ws_host_last_link_revoke_closes_live_socket_with_auth_revoked() -> anyh
         "/v1/hosts/unlink",
         &[("authorization", fixture.account_auth_header.as_str())],
         json!({
-            "host_installation_id": fixture.host.to_string()
+            "host_device_id": fixture.host.to_string()
         }),
     )
     .await;
@@ -743,12 +743,12 @@ async fn ws_client_rejects_legacy_ws_ticket_after_device_account_changes() -> an
         )
         .await;
     };
-    store::device_installations::set_account_id(&relay.pool, &browser_id, &account_a).await?;
+    store::devices::set_account_id(&relay.pool, &browser_id, &account_a).await?;
 
     let ticket =
         issue_client_ws_ticket(&relay, &account_a, browser_id, DeviceRole::BrowserAdmin).await?;
 
-    store::device_installations::set_account_id(&relay.pool, &browser_id, &account_b).await?;
+    store::devices::set_account_id(&relay.pool, &browser_id, &account_b).await?;
 
     let mut ws = connect_gateway_ws_with_legacy_ticket_query(&relay, "/ws/client", &ticket).await?;
     expect_close_code(&mut ws, 4401, "auth_revoked").await?;

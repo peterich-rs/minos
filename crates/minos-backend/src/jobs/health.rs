@@ -75,4 +75,13 @@ impl JobHealthRegistry {
         let inner = self.inner.read().unwrap();
         inner.get(name).map_or(0, |h| h.consecutive_failures)
     }
+
+    /// Clear the consecutive-failure streak after a supervised respawn backoff.
+    pub fn record_respawn(&self, name: &str) {
+        let mut inner = self.inner.write().unwrap();
+        if let Some(health) = inner.get_mut(name) {
+            health.consecutive_failures = 0;
+            health.last_error = Some("respawn_backoff".into());
+        }
+    }
 }

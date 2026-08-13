@@ -348,6 +348,14 @@ impl ClaudeControlSession {
         Ok(())
     }
 
+    /// Leader pid of the current turn child (for process-group shutdown).
+    pub fn current_turn_pid(&self) -> Option<i32> {
+        self.current_turn_child
+            .as_ref()
+            .and_then(Child::id)
+            .and_then(|pid| i32::try_from(pid).ok())
+    }
+
     async fn hard_kill(&mut self) {
         self.process_alive.store(false, Ordering::SeqCst);
         // Drop stdin first so CLI notices EOF.
@@ -358,8 +366,10 @@ impl ClaudeControlSession {
                 let pid = child.id();
                 if let Some(pid) = pid {
                     #[allow(clippy::cast_possible_wrap)]
+                    let pid_i32 = pid as i32;
+                    // Negative pid = process group (child was spawned with setpgid(0,0)).
                     unsafe {
-                        libc::kill(pid as i32, libc::SIGTERM);
+                        libc::kill(-pid_i32, libc::SIGTERM);
                     }
                 }
             }
@@ -370,6 +380,14 @@ impl ClaudeControlSession {
                     session_id = %self.session_id,
                     "claude did not exit after SIGTERM, sending SIGKILL"
                 );
+                #[cfg(unix)]
+                if let Some(pid) = child.id() {
+                    #[allow(clippy::cast_possible_wrap)]
+                    let pid_i32 = pid as i32;
+                    unsafe {
+                        libc::kill(-pid_i32, libc::SIGKILL);
+                    }
+                }
                 let _ = child.kill().await;
             }
         }

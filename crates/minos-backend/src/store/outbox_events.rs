@@ -221,12 +221,15 @@ async fn claim_available_sqlite(
         .map_err(store_err("outbox_events::claim_available.begin_sqlite"))?;
 
     let candidate_ids = sqlx::query_scalar::<_, String>(
-        "SELECT outbox_id
-           FROM outbox_events
-          WHERE status = 'pending'
-            AND lane = ?
-            AND available_at_ms <= ?
-          ORDER BY available_at_ms ASC, outbox_id ASC
+        "SELECT o.outbox_id
+           FROM outbox_events o
+           JOIN durable_event_log d
+             ON d.topic_kind = o.topic_kind
+            AND d.event_id = o.event_id
+          WHERE o.status = 'pending'
+            AND o.lane = ?
+            AND o.available_at_ms <= ?
+          ORDER BY d.topic ASC, d.topic_seq ASC, o.available_at_ms ASC, o.outbox_id ASC
           LIMIT ?",
     )
     .bind(lane.as_str())
@@ -285,14 +288,17 @@ async fn claim_available_postgres(
 ) -> Result<Vec<OutboxEventRow>, BackendError> {
     let rows = sqlx::query_as::<_, OutboxEventRowTuple>(
         "WITH cte AS (
-             SELECT outbox_id
-               FROM outbox_events
-              WHERE status = 'pending'
-                AND lane = $4
-                AND available_at_ms <= $1
-              ORDER BY available_at_ms ASC, outbox_id ASC
+             SELECT o.outbox_id
+               FROM outbox_events o
+               JOIN durable_event_log d
+                 ON d.topic_kind = o.topic_kind
+                AND d.event_id = o.event_id
+              WHERE o.status = 'pending'
+                AND o.lane = $4
+                AND o.available_at_ms <= $1
+              ORDER BY d.topic ASC, d.topic_seq ASC, o.available_at_ms ASC, o.outbox_id ASC
               LIMIT $2
-              FOR UPDATE SKIP LOCKED
+              FOR UPDATE OF o SKIP LOCKED
          )
          UPDATE outbox_events o
             SET status = 'claimed',
@@ -1113,7 +1119,7 @@ mod tests {
             &serde_json::json!({
                 "kind": "host_command_issued",
                 "command_id": "cmd-1",
-                "host_installation_id": host_id.to_string(),
+                "host_device_id": host_id.to_string(),
                 "method": "minos_health",
                 "params": null,
                 "deadline_at_ms": T0 + 1_000,
@@ -1157,7 +1163,9 @@ mod tests {
         assert_eq!(row.status, OutboxStatus::Claimed);
         assert_eq!(row.ack_at_ms, None);
 
-        assert!(host_commands::ack(&pool, "cmd-1", T0 + 2).await.unwrap());
+        assert!(host_commands::ack(&pool, "cmd-1", host_id, T0 + 2)
+            .await
+            .unwrap());
         assert!(ack(&pool, "out-host-command", T0 + 3).await.unwrap());
 
         let row = get(&pool, "out-host-command").await.unwrap().unwrap();
@@ -1180,7 +1188,7 @@ mod tests {
             &serde_json::json!({
                 "kind": "host_command_issued",
                 "command_id": "cmd-expired",
-                "host_installation_id": host_id.to_string(),
+                "host_device_id": host_id.to_string(),
                 "method": "minos_health",
                 "params": null,
                 "deadline_at_ms": T0 + 10,
@@ -1244,7 +1252,7 @@ mod tests {
             &serde_json::json!({
                 "kind": "host_command_issued",
                 "command_id": "cmd-timeout-no-unlock",
-                "host_installation_id": host_id.to_string(),
+                "host_device_id": host_id.to_string(),
                 "method": "minos_health",
                 "params": null,
                 "deadline_at_ms": T0 + 10,
@@ -1328,7 +1336,7 @@ mod tests {
             &serde_json::json!({
                 "kind": "host_command_issued",
                 "command_id": "cmd-obs-past-deadline",
-                "host_installation_id": host_id.to_string(),
+                "host_device_id": host_id.to_string(),
                 "method": "minos_health",
                 "params": null,
                 "deadline_at_ms": T0 + 10,
@@ -1368,9 +1376,11 @@ mod tests {
                 .len(),
             1
         );
-        assert!(host_commands::ack(&pool, "cmd-obs-past-deadline", T0 + 5)
-            .await
-            .unwrap());
+        assert!(
+            host_commands::ack(&pool, "cmd-obs-past-deadline", host_id, T0 + 5)
+                .await
+                .unwrap()
+        );
         let cmd = host_commands::get(&pool, "cmd-obs-past-deadline")
             .await
             .unwrap()
@@ -1439,7 +1449,7 @@ mod tests {
                 .len(),
             1
         );
-        assert!(host_commands::ack(&pool, "cmd-expire-obs", T0 + 5)
+        assert!(host_commands::ack(&pool, "cmd-expire-obs", host_id, T0 + 5)
             .await
             .unwrap());
 
@@ -1604,6 +1614,7 @@ mod tests {
         assert!(host_commands::finish(
             &pool,
             "cmd-host-failed",
+            host_id,
             host_commands::HostCommandTerminalStatus::Failed,
             None,
             Some(&serde_json::json!({ "status": "failed", "message": "boom" })),
@@ -1694,7 +1705,7 @@ mod tests {
             &serde_json::json!({
                 "kind": "host_command_issued",
                 "command_id": "cmd-pending",
-                "host_installation_id": host_id.to_string(),
+                "host_device_id": host_id.to_string(),
                 "method": "minos_health",
                 "params": null,
                 "deadline_at_ms": T0 + 1_000,
@@ -1734,7 +1745,7 @@ mod tests {
                 .unwrap(),
             0
         );
-        assert!(host_commands::ack(&pool, "cmd-pending", T0 + 2)
+        assert!(host_commands::ack(&pool, "cmd-pending", host_id, T0 + 2)
             .await
             .unwrap());
         assert_eq!(
@@ -1767,7 +1778,7 @@ mod tests {
             &serde_json::json!({
                 "kind": "host_command_issued",
                 "command_id": "cmd-claimed",
-                "host_installation_id": host_id.to_string(),
+                "host_device_id": host_id.to_string(),
                 "method": "minos_health",
                 "params": null,
                 "deadline_at_ms": T0 + 1_000,
@@ -1804,7 +1815,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(claimed.len(), 1);
-        assert!(host_commands::ack(&pool, "cmd-claimed", T0 + 2)
+        assert!(host_commands::ack(&pool, "cmd-claimed", host_id, T0 + 2)
             .await
             .unwrap());
 

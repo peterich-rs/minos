@@ -384,13 +384,21 @@ export type OutboxFailureClass = "transient" | "permanent";
 
 export function classifyOutboxFailure(error: string): OutboxFailureClass {
   const e = error.toLowerCase();
+  // Auth expiry is recoverable via refresh + retry — never fail_terminal on first 401.
+  if (
+    e.includes("unauthorized") ||
+    e.includes("http 401") ||
+    e.includes("status: 401") ||
+    e.includes("status 401")
+  ) {
+    return "transient";
+  }
   if (
     e.includes("invalid_payload") ||
     e.includes("empty_text") ||
     e.includes("invalid payload") ||
     e.includes("permission") ||
     e.includes("forbidden") ||
-    e.includes("unauthorized") ||
     e.includes("not found") ||
     e.includes("http 4") ||
     e.includes("status: 4") ||

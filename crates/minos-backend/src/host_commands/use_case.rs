@@ -19,7 +19,7 @@ const COMMAND_STATUS_POLL_INTERVAL: Duration = Duration::from_millis(100);
 #[derive(Debug, Clone)]
 pub struct NewHostCommand {
     pub command_id: String,
-    pub host_installation_id: DeviceId,
+    pub host_device_id: DeviceId,
     pub agent_session_id: Option<String>,
     pub method: String,
     pub params_json: Value,
@@ -101,7 +101,7 @@ impl RuntimeHostCommandService {
     pub async fn enqueue_if_missing(
         &self,
         command_id: &str,
-        host_installation_id: DeviceId,
+        host_device_id: DeviceId,
         agent_session_id: Option<&str>,
         method: &str,
         params_json: &Value,
@@ -115,7 +115,7 @@ impl RuntimeHostCommandService {
                 &mut tx,
                 NewHostCommand {
                     command_id: command_id.to_string(),
-                    host_installation_id,
+                    host_device_id,
                     agent_session_id: agent_session_id.map(str::to_string),
                     method: method.to_string(),
                     params_json: params_json.clone(),
@@ -135,7 +135,7 @@ impl RuntimeHostCommandService {
     pub async fn enqueue(
         &self,
         command_id: &str,
-        host_installation_id: DeviceId,
+        host_device_id: DeviceId,
         agent_session_id: Option<&str>,
         method: &str,
         params_json: &Value,
@@ -148,7 +148,7 @@ impl RuntimeHostCommandService {
             &mut tx,
             NewHostCommand {
                 command_id: command_id.to_string(),
-                host_installation_id,
+                host_device_id,
                 agent_session_id: agent_session_id.map(str::to_string),
                 method: method.to_string(),
                 params_json: params_json.clone(),
@@ -172,7 +172,7 @@ impl RuntimeHostCommandService {
         host_commands::enqueue_in_tx(
             tx,
             &command.command_id,
-            command.host_installation_id,
+            command.host_device_id,
             command.agent_session_id.as_deref(),
             &command.method,
             &command.params_json,
@@ -184,7 +184,7 @@ impl RuntimeHostCommandService {
 
         let durable_event = DurableEvent::HostCommandIssued {
             command_id: command.command_id,
-            host_installation_id: command.host_installation_id.to_string(),
+            host_device_id: command.host_device_id.to_string(),
             agent_session_id: command.agent_session_id,
             method: command.method,
             params: command.params_json,
@@ -228,12 +228,12 @@ impl RuntimeHostCommandService {
                     method: method.to_string(),
                     message: format!("host command row missing: {command_id}"),
                 })?;
-            if row.host_installation_id != target_device_id {
+            if row.host_device_id != target_device_id {
                 return Err(BackendError::ForwardRpc {
                     method: method.to_string(),
                     message: format!(
                         "host command {command_id} belongs to {} not {target_device_id}",
-                        row.host_installation_id
+                        row.host_device_id
                     ),
                 });
             }
@@ -275,12 +275,12 @@ impl RuntimeHostCommandService {
                 method: method.to_string(),
                 message: format!("host command row missing after timeout: {command_id}"),
             })?;
-        if row.host_installation_id != target_device_id {
+        if row.host_device_id != target_device_id {
             return Err(BackendError::ForwardRpc {
                 method: method.to_string(),
                 message: format!(
                     "host command {command_id} belongs to {} not {target_device_id}",
-                    row.host_installation_id
+                    row.host_device_id
                 ),
             });
         }

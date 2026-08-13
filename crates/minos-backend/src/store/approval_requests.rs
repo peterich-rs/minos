@@ -111,7 +111,7 @@ pub async fn get(
 ) -> Result<Option<ApprovalRequestRow>, BackendError> {
     let row = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => sqlx::query_as::<_, ApprovalRequestDbRow>(
-            "SELECT ar.request_id, ar.agent_session_id, ar.turn_id, COALESCE(s.host_installation_id, t.owner_device_id), ar.method,
+            "SELECT ar.request_id, ar.agent_session_id, ar.turn_id, COALESCE(s.host_device_id, t.owner_device_id), ar.method,
                         ar.params_json, ar.state, ar.deadline_at_ms, ar.created_at_ms,
                         ar.resolved_at_ms, ar.resolution_json, ar.client_request_id
                    FROM approval_requests ar
@@ -126,7 +126,7 @@ pub async fn get(
         .await,
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, ApprovalRequestDbRow>(
-                "SELECT ar.request_id, ar.agent_session_id, ar.turn_id, s.host_installation_id,
+                "SELECT ar.request_id, ar.agent_session_id, ar.turn_id, s.host_device_id,
                         ar.method, ar.params_json::text, ar.state::text, ar.deadline_at_ms,
                         ar.created_at_ms, ar.resolved_at_ms, ar.resolution_json::text,
                         ar.client_request_id
@@ -156,7 +156,7 @@ pub async fn get_by_client_request_id(
     }
     let row = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => sqlx::query_as::<_, ApprovalRequestDbRow>(
-            "SELECT ar.request_id, ar.agent_session_id, ar.turn_id, COALESCE(s.host_installation_id, t.owner_device_id), ar.method,
+            "SELECT ar.request_id, ar.agent_session_id, ar.turn_id, COALESCE(s.host_device_id, t.owner_device_id), ar.method,
                         ar.params_json, ar.state, ar.deadline_at_ms, ar.created_at_ms,
                         ar.resolved_at_ms, ar.resolution_json, ar.client_request_id
                    FROM approval_requests ar
@@ -171,7 +171,7 @@ pub async fn get_by_client_request_id(
         .await,
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, ApprovalRequestDbRow>(
-                "SELECT ar.request_id, ar.agent_session_id, ar.turn_id, s.host_installation_id,
+                "SELECT ar.request_id, ar.agent_session_id, ar.turn_id, s.host_device_id,
                         ar.method, ar.params_json::text, ar.state::text, ar.deadline_at_ms,
                         ar.created_at_ms, ar.resolved_at_ms, ar.resolution_json::text,
                         ar.client_request_id
@@ -272,7 +272,7 @@ pub async fn list_expired_pending(
 ) -> Result<Vec<ApprovalRequestRow>, BackendError> {
     let rows = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => sqlx::query_as::<_, ApprovalRequestDbRow>(
-            "SELECT ar.request_id, ar.agent_session_id, ar.turn_id, COALESCE(s.host_installation_id, t.owner_device_id), ar.method,
+            "SELECT ar.request_id, ar.agent_session_id, ar.turn_id, COALESCE(s.host_device_id, t.owner_device_id), ar.method,
                         ar.params_json, ar.state, ar.deadline_at_ms, ar.created_at_ms,
                         ar.resolved_at_ms, ar.resolution_json, ar.client_request_id
                    FROM approval_requests ar
@@ -292,7 +292,7 @@ pub async fn list_expired_pending(
         .await,
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, ApprovalRequestDbRow>(
-                "SELECT ar.request_id, ar.agent_session_id, ar.turn_id, s.host_installation_id,
+                "SELECT ar.request_id, ar.agent_session_id, ar.turn_id, s.host_device_id,
                         ar.method, ar.params_json::text, ar.state::text, ar.deadline_at_ms,
                         ar.created_at_ms, ar.resolved_at_ms, ar.resolution_json::text,
                         ar.client_request_id
@@ -312,7 +312,92 @@ pub async fn list_expired_pending(
     }
     .map_err(store_err("approval_requests::list_expired_pending"))?;
 
-    rows.into_iter().map(decode_row).collect()
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        match decode_row(row) {
+            Ok(decoded) => out.push(decoded),
+            Err(error) => {
+                // NULL host / corrupt row must not fail the whole poller batch
+                // (that previously caused a tight busy-loop on the due deadline).
+                tracing::warn!(
+                    target: "minos_backend::store::approval_requests",
+                    error = %error,
+                    "skipping undecodable expired approval row"
+                );
+            }
+        }
+    }
+    Ok(out)
+}
+
+pub async fn timeout_pending_with_null_host(
+    store: &impl AsStorePool,
+    now_ms: i64,
+    limit: u32,
+) -> Result<u64, BackendError> {
+    let resolution = serde_json::json!({ "reason": "timeout", "orphan": "null_host" });
+    let resolution_json =
+        serde_json::to_string(&resolution).map_err(|error| BackendError::StoreDecode {
+            column: "approval_requests.resolution_json".into(),
+            message: error.to_string(),
+        })?;
+    let result = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => sqlx::query(
+            "UPDATE approval_requests
+                SET state = ?,
+                    resolved_at_ms = ?,
+                    resolution_json = ?
+              WHERE request_id IN (
+                    SELECT ar.request_id
+                      FROM approval_requests ar
+                      LEFT JOIN agent_sessions s ON s.session_id = ar.agent_session_id
+                      LEFT JOIN sessions t ON t.session_id = ar.agent_session_id
+                     WHERE ar.state = ?
+                       AND ar.deadline_at_ms <= ?
+                       AND COALESCE(s.host_device_id, t.owner_device_id) IS NULL
+                     ORDER BY ar.deadline_at_ms ASC
+                     LIMIT ?
+              )",
+        )
+        .bind(ApprovalRequestState::Timeout.as_str())
+        .bind(now_ms)
+        .bind(resolution_json.as_str())
+        .bind(ApprovalRequestState::Pending.as_str())
+        .bind(now_ms)
+        .bind(i64::from(limit))
+        .execute(pool)
+        .await
+        .map(|r| r.rows_affected()),
+        StorePoolRef::Postgres(pool) => sqlx::query(
+            "WITH victims AS (
+                SELECT ar.request_id
+                  FROM approval_requests ar
+                  JOIN agent_sessions s ON s.session_id = ar.agent_session_id
+                 WHERE ar.state = 'pending'::approval_state
+                   AND ar.deadline_at_ms <= $1
+                   AND s.host_device_id IS NULL
+                 ORDER BY ar.deadline_at_ms ASC
+                 LIMIT $3
+             )
+             UPDATE approval_requests ar
+                SET state = 'timeout'::approval_state,
+                    resolved_at_ms = $1,
+                    resolution_json = CAST($2 AS JSONB)
+               FROM victims v
+              WHERE ar.request_id = v.request_id
+                AND ar.state = 'pending'::approval_state",
+        )
+        .bind(now_ms)
+        .bind(resolution_json.as_str())
+        .bind(i64::from(limit))
+        .execute(pool)
+        .await
+        .map(|r| r.rows_affected()),
+    }
+    .map_err(store_err(
+        "approval_requests::timeout_pending_with_null_host",
+    ))?;
+    Ok(result)
 }
 
 pub async fn next_pending_deadline_at_ms(
@@ -353,7 +438,7 @@ pub async fn list_pending_for_hosts(
     let rows = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
             let mut builder = QueryBuilder::<Sqlite>::new(
-                "SELECT ar.request_id, ar.agent_session_id, ar.turn_id, COALESCE(s.host_installation_id, t.owner_device_id), ar.method,
+                "SELECT ar.request_id, ar.agent_session_id, ar.turn_id, COALESCE(s.host_device_id, t.owner_device_id), ar.method,
                         ar.params_json, ar.state, ar.deadline_at_ms, ar.created_at_ms,
                         ar.resolved_at_ms, ar.resolution_json, ar.client_request_id
                    FROM approval_requests ar
@@ -364,7 +449,7 @@ pub async fn list_pending_for_hosts(
                   WHERE ar.state = ",
             );
             builder.push_bind(ApprovalRequestState::Pending.as_str());
-            builder.push(" AND COALESCE(s.host_installation_id, t.owner_device_id) IN (");
+            builder.push(" AND COALESCE(s.host_device_id, t.owner_device_id) IN (");
             {
                 let mut separated = builder.separated(", ");
                 for host_device_id in host_device_ids {
@@ -380,7 +465,7 @@ pub async fn list_pending_for_hosts(
         }
         StorePoolRef::Postgres(pool) => {
             let mut builder = QueryBuilder::<Postgres>::new(
-                "SELECT ar.request_id, ar.agent_session_id, ar.turn_id, s.host_installation_id,
+                "SELECT ar.request_id, ar.agent_session_id, ar.turn_id, s.host_device_id,
                         ar.method, ar.params_json::text, ar.state::text, ar.deadline_at_ms,
                         ar.created_at_ms, ar.resolved_at_ms, ar.resolution_json::text,
                         ar.client_request_id
@@ -388,7 +473,7 @@ pub async fn list_pending_for_hosts(
                    JOIN agent_sessions s
                      ON s.session_id = ar.agent_session_id
                   WHERE ar.state = 'pending'::approval_state
-                    AND s.host_installation_id IN (",
+                    AND s.host_device_id IN (",
             );
             {
                 let mut separated = builder.separated(", ");
@@ -441,7 +526,7 @@ fn decode_row(row: ApprovalRequestDbRow) -> Result<ApprovalRequestRow, BackendEr
     ) = row;
 
     let host_device_id = host_device_id.ok_or_else(|| BackendError::StoreDecode {
-        column: "approval_requests.host_installation_id".into(),
+        column: "approval_requests.host_device_id".into(),
         message: "NULL host installation on approval session".into(),
     })?;
 
@@ -452,7 +537,7 @@ fn decode_row(row: ApprovalRequestDbRow) -> Result<ApprovalRequestRow, BackendEr
         host_device_id: Uuid::parse_str(&host_device_id)
             .map(DeviceId)
             .map_err(|error| BackendError::StoreDecode {
-                column: "approval_requests.host_installation_id".into(),
+                column: "approval_requests.host_device_id".into(),
                 message: error.to_string(),
             })?,
         method,
@@ -522,7 +607,7 @@ mod tests {
         let host = crate::store::test_support::insert_ios_device(pool, &account).await;
         sqlx::query(
             "INSERT INTO agent_sessions
-                (session_id, conversation_id, project_id, host_installation_id, agent_id, status, started_at_ms, ended_at_ms)
+                (session_id, conversation_id, project_id, host_device_id, agent_id, status, started_at_ms, ended_at_ms)
              VALUES (?, ?, NULL, ?, NULL, 'running', ?, NULL)",
         )
         .bind(session_id)

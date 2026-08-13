@@ -79,14 +79,14 @@ export type HostEnsureRunResult =
   | { kind: "offline"; message: string; hostCredentialAccountId?: null }
   | {
       kind: "registered-online";
-      hostInstallationId: string;
+      hostDeviceId: string;
       hostDisplayName: string;
       linkedAtMs: number;
       pairId: string;
     }
   | {
       kind: "registered-offline";
-      hostInstallationId: string;
+      hostDeviceId: string;
       hostDisplayName: string;
       linkedAtMs: number;
       pairId: string;
@@ -186,7 +186,7 @@ export async function runHostEnsure(
   if (online) {
     return {
       kind: "registered-online",
-      hostInstallationId: outcome.hostInstallationId,
+      hostDeviceId: outcome.hostDeviceId,
       hostDisplayName: outcome.hostDisplayName,
       linkedAtMs: outcome.linkedAtMs,
       pairId: outcome.pairId,
@@ -194,7 +194,7 @@ export async function runHostEnsure(
   }
   return {
     kind: "registered-offline",
-    hostInstallationId: outcome.hostInstallationId,
+    hostDeviceId: outcome.hostDeviceId,
     hostDisplayName: outcome.hostDisplayName,
     linkedAtMs: outcome.linkedAtMs,
     pairId: outcome.pairId,

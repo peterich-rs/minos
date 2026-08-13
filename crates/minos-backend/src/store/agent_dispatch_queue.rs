@@ -1055,7 +1055,7 @@ where
 pub async fn set_lease<S>(
     store: &S,
     delivery_id: &str,
-    host_installation_id: &str,
+    host_device_id: &str,
     lease_expires_at_ms: i64,
     now_ms: i64,
 ) -> Result<(), BackendError>
@@ -1071,7 +1071,7 @@ where
                      updated_at_ms = ?3
                  WHERE dispatch_id = ?4",
             )
-            .bind(host_installation_id)
+            .bind(host_device_id)
             .bind(lease_expires_at_ms)
             .bind(now_ms)
             .bind(delivery_id)
@@ -1088,7 +1088,7 @@ where
                      updated_at_ms = $3
                  WHERE dispatch_id = $4",
             )
-            .bind(host_installation_id)
+            .bind(host_device_id)
             .bind(lease_expires_at_ms)
             .bind(now_ms)
             .bind(delivery_id)
@@ -1096,6 +1096,107 @@ where
             .await
             .map_err(store_err("agent_dispatch_queue::set_lease"))?;
             Ok(())
+        }
+    }
+}
+
+/// Extend an active mailbox lease when the owning host is still working the delivery.
+pub async fn renew_lease<S>(
+    store: &S,
+    delivery_id: &str,
+    host_device_id: &str,
+    lease_expires_at_ms: i64,
+    now_ms: i64,
+) -> Result<bool, BackendError>
+where
+    S: AsStorePool + ?Sized,
+{
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            let result = sqlx::query(
+                "UPDATE bot_message_deliveries
+                 SET lease_expires_at_ms = ?1,
+                     updated_at_ms = ?2
+                 WHERE dispatch_id = ?3
+                   AND status = ?4
+                   AND lease_owner_host_id = ?5",
+            )
+            .bind(lease_expires_at_ms)
+            .bind(now_ms)
+            .bind(delivery_id)
+            .bind(STATUS_INFLIGHT)
+            .bind(host_device_id)
+            .execute(pool)
+            .await
+            .map_err(store_err("agent_dispatch_queue::renew_lease"))?;
+            Ok(result.rows_affected() == 1)
+        }
+        StorePoolRef::Postgres(pool) => {
+            let result = sqlx::query(
+                "UPDATE bot_message_deliveries
+                 SET lease_expires_at_ms = $1,
+                     updated_at_ms = $2
+                 WHERE dispatch_id = $3
+                   AND status = $4
+                   AND lease_owner_host_id = $5",
+            )
+            .bind(lease_expires_at_ms)
+            .bind(now_ms)
+            .bind(delivery_id)
+            .bind(STATUS_INFLIGHT)
+            .bind(host_device_id)
+            .execute(pool)
+            .await
+            .map_err(store_err("agent_dispatch_queue::renew_lease"))?;
+            Ok(result.rows_affected() == 1)
+        }
+    }
+}
+
+/// Renew every inflight lease owned by `host_device_id` (host keepalive / Ping).
+pub async fn renew_leases_for_host<S>(
+    store: &S,
+    host_device_id: &str,
+    lease_expires_at_ms: i64,
+    now_ms: i64,
+) -> Result<u64, BackendError>
+where
+    S: AsStorePool + ?Sized,
+{
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            let result = sqlx::query(
+                "UPDATE bot_message_deliveries
+                 SET lease_expires_at_ms = ?1,
+                     updated_at_ms = ?2
+                 WHERE status = ?3
+                   AND lease_owner_host_id = ?4",
+            )
+            .bind(lease_expires_at_ms)
+            .bind(now_ms)
+            .bind(STATUS_INFLIGHT)
+            .bind(host_device_id)
+            .execute(pool)
+            .await
+            .map_err(store_err("agent_dispatch_queue::renew_leases_for_host"))?;
+            Ok(result.rows_affected())
+        }
+        StorePoolRef::Postgres(pool) => {
+            let result = sqlx::query(
+                "UPDATE bot_message_deliveries
+                 SET lease_expires_at_ms = $1,
+                     updated_at_ms = $2
+                 WHERE status = $3
+                   AND lease_owner_host_id = $4",
+            )
+            .bind(lease_expires_at_ms)
+            .bind(now_ms)
+            .bind(STATUS_INFLIGHT)
+            .bind(host_device_id)
+            .execute(pool)
+            .await
+            .map_err(store_err("agent_dispatch_queue::renew_leases_for_host"))?;
+            Ok(result.rows_affected())
         }
     }
 }

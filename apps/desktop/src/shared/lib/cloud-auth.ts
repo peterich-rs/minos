@@ -13,12 +13,23 @@ export type CloudAuthSnapshot = {
 };
 
 type CloudAuthProvider = () => CloudAuthSnapshot | null;
+/** Refresh access token; returns new bearer or null if refresh failed / signed out. */
+type CloudAccessTokenRefresher = () => Promise<string | null>;
 
 let provider: CloudAuthProvider | null = null;
+let refresher: CloudAccessTokenRefresher | null = null;
+let refreshInFlight: Promise<string | null> | null = null;
 
 /** Wire account-store (or tests) as the sole auth source for shared transport. */
 export function registerCloudAuthProvider(next: CloudAuthProvider): void {
   provider = next;
+}
+
+/** Wire account-store proactive / 401 refresh implementation. */
+export function registerCloudAccessTokenRefresher(
+  next: CloudAccessTokenRefresher,
+): void {
+  refresher = next;
 }
 
 /** Current Hub credentials, or null when signed out / incomplete. */
@@ -39,4 +50,24 @@ export function isCloudAuthReady(): boolean {
       auth.accountId.trim() &&
       auth.authPhase === "authenticated",
   );
+}
+
+/**
+ * Ensure a fresh access token (single-flight). Used by HTTP 401 retry and
+ * proactive refresh. Returns null when signed out or refresh fails.
+ */
+export async function ensureFreshCloudAccessToken(): Promise<string | null> {
+  if (!refresher) {
+    return getCloudAuth()?.accessToken?.trim() || null;
+  }
+  if (!refreshInFlight) {
+    refreshInFlight = (async () => {
+      try {
+        return await refresher!();
+      } finally {
+        refreshInFlight = null;
+      }
+    })();
+  }
+  return refreshInFlight;
 }

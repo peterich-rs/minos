@@ -387,7 +387,7 @@ pub struct PushStatusDto {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HostPrepareLinkDto {
-    pub installation_id: String,
+    pub device_id: String,
     pub public_key: String,
     pub nonce: String,
 }
@@ -1286,23 +1286,20 @@ impl DaemonBridge {
             .await
             .context("minos_local_host_prepare_link")?;
         Ok(HostPrepareLinkDto {
-            installation_id: response.installation_id,
+            device_id: response.device_id,
             public_key: response.public_key,
             nonce: response.nonce,
         })
     }
 
-    /// Host Link: Ed25519 sign `"{installation_id}:{nonce}:v1/hosts/link"`.
+    /// Host Link: Ed25519 sign `"{device_id}:{nonce}:v1/hosts/link"`.
     pub async fn host_sign_link_proof(
         &self,
-        installation_id: String,
+        device_id: String,
         nonce: String,
     ) -> Result<HostSignLinkProofDto> {
         let client = self.client().await?;
-        let req = HostSignLinkProofParams {
-            installation_id,
-            nonce,
-        };
+        let req = HostSignLinkProofParams { device_id, nonce };
         let response: HostSignLinkProofResponse = client
             .request("minos_local_host_sign_link_proof", [req])
             .await
@@ -1481,8 +1478,15 @@ fn remove_discovery_file() {
 async fn start_managed_daemon() -> Result<(Arc<DaemonHandle>, String)> {
     let minos_home = minos_daemon::paths::minos_home().map_err(|e| anyhow!(e.to_string()))?;
     let local_state_path = minos_home.join("local-state.json");
-    let local_state = LocalState::load_or_init(&local_state_path)
+    let device_id = crate::identity::device_id().map_err(|e| anyhow!("load DeviceId: {e}"))?;
+    let mut local_state = LocalState::load_or_init(&local_state_path)
         .map_err(|e| anyhow!("LocalState::load_or_init: {e}"))?;
+    if local_state.self_device_id != device_id {
+        local_state.self_device_id = device_id;
+        local_state
+            .save(&local_state_path)
+            .map_err(|e| anyhow!("LocalState::save DeviceId: {e}"))?;
+    }
     let discovery_path = minos_daemon::paths::run_dir()
         .map_err(|e| anyhow!(e.to_string()))?
         .join("daemon-rpc.json");

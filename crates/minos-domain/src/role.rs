@@ -1,9 +1,9 @@
 //! `DeviceRole` — classifies which side of the relay a device speaks from.
 //!
 //! Kebab-case string is the single **wire** format (headers, JWT, envelopes).
-//! Storage uses a shorter `installation_kind` vocabulary (`mobile` / `browser` /
-//! `desktop` / `host`); map via [`DeviceRole::to_installation_kind`] /
-//! [`DeviceRole::from_installation_kind`].
+//! Storage uses a shorter `device_kind` vocabulary (`mobile` / `browser` /
+//! `desktop` / `host`); map via [`DeviceRole::to_device_kind`] /
+//! [`DeviceRole::from_device_kind`].
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -43,9 +43,9 @@ impl DeviceRole {
         )
     }
 
-    /// Map wire role → `device_installations.kind` / `installation_kind`.
+    /// Map wire role → `devices.kind`.
     #[must_use]
-    pub const fn to_installation_kind(self) -> &'static str {
+    pub const fn to_device_kind(self) -> &'static str {
         match self {
             Self::AgentHost => "host",
             Self::MobileClient => "mobile",
@@ -55,13 +55,13 @@ impl DeviceRole {
     }
 
     /// Map storage `kind` → wire role.
-    pub fn from_installation_kind(kind: &str) -> Result<Self, String> {
+    pub fn from_device_kind(kind: &str) -> Result<Self, String> {
         match kind {
             "host" => Ok(Self::AgentHost),
             "mobile" => Ok(Self::MobileClient),
             "browser" => Ok(Self::BrowserAdmin),
             "desktop" => Ok(Self::DesktopConsole),
-            other => Err(format!("unknown installation kind: {other}")),
+            other => Err(format!("unknown device kind: {other}")),
         }
     }
 }
@@ -107,15 +107,15 @@ mod tests {
     }
 
     #[test]
-    fn installation_kind_round_trips() {
+    fn device_kind_round_trips() {
         for role in [
             DeviceRole::AgentHost,
             DeviceRole::MobileClient,
             DeviceRole::BrowserAdmin,
             DeviceRole::DesktopConsole,
         ] {
-            let kind = role.to_installation_kind();
-            let back = DeviceRole::from_installation_kind(kind).unwrap();
+            let kind = role.to_device_kind();
+            let back = DeviceRole::from_device_kind(kind).unwrap();
             assert_eq!(back, role, "kind round-trip failed for {role:?}");
         }
     }

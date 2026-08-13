@@ -366,6 +366,6 @@ main.rs
 
 Desktop 在登录后调用：
 
-1. `minos_local_host_prepare_link` — 返回 `installation_id` + `public_key` + backend nonce
+1. `minos_local_host_prepare_link` — 返回 `device_id` + `public_key` + backend nonce
 2. Desktop 用 account bearer 调 `POST /v1/hosts/link`（签名可由 `minos_local_host_sign_link_proof` 生成）
 3. `minos_local_host_apply_link_token` — 持久化 `hit_*` 并 `secret_notify` 唤醒 relay 拨号 `/ws/host`

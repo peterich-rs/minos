@@ -7,7 +7,7 @@
 //! `account_id` for clients and `public_key` for hosts. Clients are
 //! inserted at login/register/exchange via `insert_client_for_account`;
 //! hosts at bootstrap via `insert_host_with_public_key`. Device-secret
-//! verification has been removed (hosts use `host_installation_tokens`;
+//! verification has been removed (hosts use `host_tokens`;
 //! clients use bearer access tokens).
 
 use axum::http::{HeaderMap, StatusCode};
@@ -15,7 +15,7 @@ use minos_domain::{DeviceId, DeviceRole};
 use std::str::FromStr;
 use uuid::Uuid;
 
-use crate::store::{self, device_installations::DeviceRow};
+use crate::store::{self, devices::DeviceRow};
 
 pub const HDR_DEVICE_ID: &str = "x-device-id";
 pub const HDR_DEVICE_ROLE: &str = "x-device-role";
@@ -71,7 +71,7 @@ pub async fn authenticate(
         .map(|name| name.trim().to_owned())
         .filter(|name| !name.is_empty());
 
-    let existing = store::device_installations::get_device(store, device_id)
+    let existing = store::devices::get_device(store, device_id)
         .await
         .map_err(|e| AuthError::Internal(e.to_string()))?;
     let should_backfill_display_name = existing.as_ref().is_some_and(|row| {
@@ -86,8 +86,7 @@ pub async fn authenticate(
     if should_backfill_display_name {
         if let Some(new_display_name) = provided_display_name.as_deref() {
             if let Err(e) =
-                store::device_installations::set_display_name(store, &device_id, new_display_name)
-                    .await
+                store::devices::set_display_name(store, &device_id, new_display_name).await
             {
                 tracing::warn!(
                     target: "minos_backend::http::auth",
@@ -136,7 +135,7 @@ pub fn classify(
     role: DeviceRole,
 ) -> Result<Classification, AuthError> {
     // Device-secret rail removed with `secret_hash` column. Provided secrets
-    // are ignored; host steady-state auth uses host_installation_tokens.
+    // are ignored; host steady-state auth uses host_tokens.
     let _ = (provided_secret, role);
     match row {
         None => Ok(Classification::FirstConnect),

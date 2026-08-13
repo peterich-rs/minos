@@ -5,6 +5,8 @@
  * D02 same-account host link). Device role is `desktop-console`.
  */
 
+import { ensureFreshCloudAccessToken } from "@/shared/lib/cloud-auth";
+
 const DEFAULT_BACKEND_URL = "http://127.0.0.1:8787";
 
 export type AuthResponse = {
@@ -12,10 +14,11 @@ export type AuthResponse = {
   access_token: string;
   refresh_token: string;
   expires_in: number;
+  host_token?: string | null;
 };
 
 export type HostLinkResult = {
-  hostInstallationId: string;
+  hostDeviceId: string;
   hostInstallationToken: string;
   pairId: string;
   accountId: string;
@@ -24,7 +27,7 @@ export type HostLinkResult = {
 };
 
 export type ListedHost = {
-  hostInstallationId: string;
+  hostDeviceId: string;
   hostDisplayName: string;
   linkedAtMs: number;
   online: boolean;
@@ -112,8 +115,22 @@ function errorFromPayload(
 async function requestJson<T>(
   path: string,
   init: RequestInit,
+  opts?: { _retried401?: boolean },
 ): Promise<T> {
   const response = await fetch(`${backendHttpBase()}${path}`, init);
+  if (
+    response.status === 401 &&
+    !opts?._retried401 &&
+    !path.includes("/v1/auth/refresh") &&
+    !path.includes("/v1/auth/logout")
+  ) {
+    const nextToken = await ensureFreshCloudAccessToken();
+    if (nextToken) {
+      const headers = new Headers(init.headers);
+      headers.set("authorization", `Bearer ${nextToken}`);
+      return requestJson(path, { ...init, headers }, { _retried401: true });
+    }
+  }
   if (!response.ok) {
     const payload = await parseErrorPayload(response);
     throw errorFromPayload(response.status, payload);
@@ -174,7 +191,7 @@ export async function linkHost(
   deviceId: string,
   accessToken: string,
   body: {
-    installationId: string;
+    deviceId: string;
     nonce: string;
     publicKey: string;
     signature: string;
@@ -183,7 +200,7 @@ export async function linkHost(
 ): Promise<HostLinkResult> {
   const envelope = await requestJson<
     ResponseEnvelope<{
-      host_installation_id: string;
+      host_device_id: string;
       host_installation_token: string;
       link: {
         pair_id: string;
@@ -196,7 +213,7 @@ export async function linkHost(
     method: "POST",
     headers: deviceHeaders(deviceId, accessToken),
     body: JSON.stringify({
-      installation_id: body.installationId,
+      device_id: body.deviceId,
       nonce: body.nonce,
       public_key: body.publicKey,
       signature: body.signature,
@@ -205,7 +222,7 @@ export async function linkHost(
   });
   const data = envelope.data;
   return {
-    hostInstallationId: data.host_installation_id,
+    hostDeviceId: data.host_device_id,
     hostInstallationToken: data.host_installation_token,
     pairId: data.link.pair_id,
     accountId: data.link.account_id,
@@ -217,12 +234,12 @@ export async function linkHost(
 export async function unlinkHost(
   deviceId: string,
   accessToken: string,
-  hostInstallationId: string,
+  hostDeviceId: string,
 ): Promise<void> {
   await requestJson<void>("/v1/hosts/unlink", {
     method: "POST",
     headers: deviceHeaders(deviceId, accessToken),
-    body: JSON.stringify({ host_installation_id: hostInstallationId }),
+    body: JSON.stringify({ host_device_id: hostDeviceId }),
   });
 }
 
@@ -233,7 +250,7 @@ export async function listHosts(
   const envelope = await requestJson<
     ResponseEnvelope<{
       hosts: Array<{
-        host_installation_id: string;
+        host_device_id: string;
         host_display_name: string;
         linked_at_ms: number;
         online: boolean;
@@ -245,7 +262,7 @@ export async function listHosts(
     headers: deviceHeaders(deviceId, accessToken),
   });
   return envelope.data.hosts.map((h) => ({
-    hostInstallationId: h.host_installation_id,
+    hostDeviceId: h.host_device_id,
     hostDisplayName: h.host_display_name,
     linkedAtMs: h.linked_at_ms,
     online: h.online,
@@ -957,7 +974,7 @@ export async function createWsTicket(
   }>("/v1/realtime/ws-ticket", {
     method: "POST",
     headers: deviceHeaders(deviceId, accessToken),
-    body: JSON.stringify({ installation_id: deviceId }),
+    body: JSON.stringify({ device_id: deviceId }),
   });
   const data = envelope.data;
   // gateway_url is often a path like `/ws/client?ticket=…` (ticket already embedded).

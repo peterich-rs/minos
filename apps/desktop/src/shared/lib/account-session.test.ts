@@ -78,7 +78,7 @@ describe("isAccessTokenFresh", () => {
 describe("account-scoped host bind storage", () => {
   const bound: HostBindState = {
     bound: true,
-    hostInstallationId: "host-a",
+    hostDeviceId: "host-a",
     hostDisplayName: "This Mac",
     boundAtMs: 42,
     pairId: "pair-a",
@@ -89,14 +89,14 @@ describe("account-scoped host bind storage", () => {
     saveStoredHostBind("acc-1", bound);
     saveStoredHostBind("acc-2", {
       ...bound,
-      hostInstallationId: "host-b",
+      hostDeviceId: "host-b",
       pairId: "pair-b",
     });
-    assert.equal(loadStoredHostBind("acc-1").hostInstallationId, "host-a");
-    assert.equal(loadStoredHostBind("acc-2").hostInstallationId, "host-b");
+    assert.equal(loadStoredHostBind("acc-1").hostDeviceId, "host-a");
+    assert.equal(loadStoredHostBind("acc-2").hostDeviceId, "host-b");
     clearStoredHostBind("acc-1");
     assert.equal(loadStoredHostBind("acc-1").bound, false);
-    assert.equal(loadStoredHostBind("acc-2").hostInstallationId, "host-b");
+    assert.equal(loadStoredHostBind("acc-2").hostDeviceId, "host-b");
   });
 
   it("returns empty without account id", () => {

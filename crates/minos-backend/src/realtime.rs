@@ -912,8 +912,9 @@ impl RealtimeFanout {
                         conn_id = %target.conn_id,
                         topic = %topic.topic_string(),
                         error = ?error,
-                        "formal gateway durable fanout dropped frame"
+                        "formal gateway durable fanout backpressure; revoking connection"
                     );
+                    target.revoke(ConnectionRevocation::Backpressure);
                 }
             }
         }
@@ -937,8 +938,9 @@ impl RealtimeFanout {
                         conn_id = %target.conn_id,
                         topic = %topic.topic_string(),
                         error = ?error,
-                        "formal gateway durable fanout dropped untracked frame"
+                        "formal gateway durable fanout backpressure; revoking connection"
                     );
+                    target.revoke(ConnectionRevocation::Backpressure);
                 }
             }
         }

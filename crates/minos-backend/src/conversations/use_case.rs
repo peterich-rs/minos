@@ -42,6 +42,11 @@ fn map_store_write(error: BackendError) -> ConversationError {
         {
             ConversationError::IdempotencyConflict(message.clone())
         }
+        BackendError::StoreQuery { operation, message }
+            if operation.ends_with("invalid_client_message_id") =>
+        {
+            ConversationError::ValidationFormat(message.clone())
+        }
         _ => ConversationError::Internal(error),
     }
 }

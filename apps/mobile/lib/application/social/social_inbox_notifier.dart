@@ -22,25 +22,42 @@ final conversationsProvider =
 class ConversationsController extends AsyncNotifier<ConversationsResponse> {
   StreamSubscription<SocialEventFrame>? _eventsSub;
 
+  /// Serialize per-frame apply/ack so concurrent unawaited handlers cannot
+  /// advance durable cursors out of order across topics.
+  Future<void> _socialApplyChain = Future<void>.value();
+
   @override
   Future<ConversationsResponse> build() async {
     // Arm SnapshotRequired consumer for app lifetime (Inbox/Timeline).
     ref.watch(imSnapshotSyncProvider);
 
-    _eventsSub ??= ref
+    // Always (re)bind on build so provider invalidate after reconnect does not
+    // leave a cancelled/completed subscription (C1).
+    await _eventsSub?.cancel();
+    _eventsSub = ref
         .read(socialRepositoryProvider)
         .socialEvents
         .listen(
           (frame) {
             // Hot path: single-row patch — never invalidateSelf / full REST.
-            unawaited(_onSocialEvent(frame));
+            // Chain applies so ack_durable_applied stays topic-order safe.
+            _socialApplyChain = _socialApplyChain
+                .catchError((_) {})
+                .then((_) => _onSocialEvent(frame));
+            unawaited(_socialApplyChain);
           },
           onError: (Object error, StackTrace stackTrace) {
             // Connection errors: soft; next hydrate corrects.
           },
-          onDone: () {},
+          onDone: () {
+            // Stream ended unexpectedly — clear so a later rebuild rebinds.
+            _eventsSub = null;
+          },
         );
-    ref.onDispose(() => _eventsSub?.cancel());
+    ref.onDispose(() {
+      unawaited(_eventsSub?.cancel() ?? Future<void>.value());
+      _eventsSub = null;
+    });
 
     // Start IM outbox worker once conversations hydrate; wire UI refresh hooks.
     final outbox = ref.read(imOutboxWorkerProvider);

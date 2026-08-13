@@ -9,6 +9,8 @@ import {
   resumeAfterFromCursors,
   loadTopicCursors,
   saveTopicCursors,
+  tryAdvanceTopicCursor,
+  isTopicSeqHole,
   CLOUD_CURSOR_STORAGE_KEY,
   LEGACY_CLOUD_CURSOR_STORAGE_KEY,
 } from "./cloud-cursors.ts";
@@ -28,6 +30,33 @@ describe("advanceTopicCursor", () => {
     const base = { "account:a": 1 };
     assert.equal(advanceTopicCursor(base, "", 2), base);
     assert.equal(advanceTopicCursor(base, "t", Number.NaN), base);
+  });
+});
+
+describe("tryAdvanceTopicCursor hole detection", () => {
+  it("advances continuous seq and first/zero cursor", () => {
+    let r = tryAdvanceTopicCursor({}, "conversation:c1", 3);
+    assert.equal(r.kind, "advanced");
+    assert.equal(r.cursors["conversation:c1"], 3);
+    r = tryAdvanceTopicCursor(r.cursors, "conversation:c1", 4);
+    assert.equal(r.kind, "advanced");
+    assert.equal(r.cursors["conversation:c1"], 4);
+    // After clear (0), high seq is allowed (SnapshotRequired catch-up).
+    r = tryAdvanceTopicCursor({ "conversation:c1": 0 }, "conversation:c1", 99);
+    assert.equal(r.kind, "advanced");
+  });
+
+  it("reports hole without advancing", () => {
+    const base = { "conversation:c1": 5 };
+    assert.equal(isTopicSeqHole(base, "conversation:c1", 7), true);
+    const r = tryAdvanceTopicCursor(base, "conversation:c1", 7);
+    assert.equal(r.kind, "hole");
+    if (r.kind === "hole") {
+      assert.equal(r.expected, 6);
+      assert.equal(r.got, 7);
+    }
+    assert.equal(r.cursors, base);
+    assert.equal(base["conversation:c1"], 5);
   });
 });
 

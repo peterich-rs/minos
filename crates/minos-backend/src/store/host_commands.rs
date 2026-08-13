@@ -61,7 +61,7 @@ impl HostCommandTerminalStatus {
 #[derive(Debug, Clone, PartialEq)]
 pub struct HostCommandRow {
     pub command_id: String,
-    pub host_installation_id: DeviceId,
+    pub host_device_id: DeviceId,
     pub agent_session_id: Option<String>,
     pub method: String,
     pub params_json: Value,
@@ -106,7 +106,7 @@ impl HostCommandRow {
 pub async fn enqueue(
     store: &impl AsStorePool,
     command_id: &str,
-    host_installation_id: DeviceId,
+    host_device_id: DeviceId,
     agent_session_id: Option<&str>,
     method: &str,
     params_json: &Value,
@@ -120,11 +120,11 @@ pub async fn enqueue(
         StorePoolRef::Sqlite(pool) => {
             sqlx::query(
                 "INSERT INTO host_commands
-                    (command_id, host_installation_id, agent_session_id, method, params_json, requested_by_account_id, status, deadline_at_ms, created_at_ms)
+                    (command_id, host_device_id, agent_session_id, method, params_json, requested_by_account_id, status, deadline_at_ms, created_at_ms)
                  VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)",
             )
             .bind(command_id)
-            .bind(host_installation_id.to_string())
+            .bind(host_device_id.to_string())
             .bind(agent_session_id)
             .bind(method)
             .bind(params_json.as_str())
@@ -138,11 +138,11 @@ pub async fn enqueue(
         StorePoolRef::Postgres(pool) => {
             sqlx::query(
                 "INSERT INTO host_commands
-                    (command_id, host_installation_id, agent_session_id, method, params_json, requested_by_account_id, status, deadline_at_ms, created_at_ms)
+                    (command_id, host_device_id, agent_session_id, method, params_json, requested_by_account_id, status, deadline_at_ms, created_at_ms)
                  VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8)",
             )
             .bind(command_id)
-            .bind(host_installation_id.to_string())
+            .bind(host_device_id.to_string())
             .bind(agent_session_id)
             .bind(method)
             .bind(params_json.as_str())
@@ -162,7 +162,7 @@ pub async fn enqueue(
 pub async fn enqueue_in_tx(
     tx: &mut DbTx<'_>,
     command_id: &str,
-    host_installation_id: DeviceId,
+    host_device_id: DeviceId,
     agent_session_id: Option<&str>,
     method: &str,
     params_json: &Value,
@@ -176,11 +176,11 @@ pub async fn enqueue_in_tx(
         DbTx::Sqlite(tx) => {
             sqlx::query(
                 "INSERT INTO host_commands
-                    (command_id, host_installation_id, agent_session_id, method, params_json, requested_by_account_id, status, deadline_at_ms, created_at_ms)
+                    (command_id, host_device_id, agent_session_id, method, params_json, requested_by_account_id, status, deadline_at_ms, created_at_ms)
                  VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)",
             )
             .bind(command_id)
-            .bind(host_installation_id.to_string())
+            .bind(host_device_id.to_string())
             .bind(agent_session_id)
             .bind(method)
             .bind(params_json.as_str())
@@ -194,11 +194,11 @@ pub async fn enqueue_in_tx(
         DbTx::Postgres(tx) => {
             sqlx::query(
                 "INSERT INTO host_commands
-                    (command_id, host_installation_id, agent_session_id, method, params_json, requested_by_account_id, status, deadline_at_ms, created_at_ms)
+                    (command_id, host_device_id, agent_session_id, method, params_json, requested_by_account_id, status, deadline_at_ms, created_at_ms)
                  VALUES ($1, $2, $3, $4, CAST($5 AS JSONB), $6, 'pending', $7, $8)",
             )
             .bind(command_id)
-            .bind(host_installation_id.to_string())
+            .bind(host_device_id.to_string())
             .bind(agent_session_id)
             .bind(method)
             .bind(params_json.as_str())
@@ -218,10 +218,10 @@ pub async fn get(
     store: &impl AsStorePool,
     command_id: &str,
 ) -> Result<Option<HostCommandRow>, BackendError> {
-    let row =
-        match store.as_store_pool() {
-            StorePoolRef::Sqlite(pool) => sqlx::query_as::<_, HostCommandRowTuple>(
-                "SELECT command_id, host_installation_id, agent_session_id, method, params_json,
+    let row = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_as::<_, HostCommandRowTuple>(
+                "SELECT command_id, host_device_id, agent_session_id, method, params_json,
                         requested_by_account_id, status, response_json, error_json,
                         deadline_at_ms, created_at_ms, ack_at_ms, finished_at_ms
                    FROM host_commands
@@ -229,9 +229,11 @@ pub async fn get(
             )
             .bind(command_id)
             .fetch_optional(pool)
-            .await,
-            StorePoolRef::Postgres(pool) => sqlx::query_as::<_, HostCommandRowTuple>(
-                "SELECT command_id, host_installation_id, agent_session_id, method, params_json,
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_as::<_, HostCommandRowTuple>(
+                "SELECT command_id, host_device_id, agent_session_id, method, params_json,
                         requested_by_account_id, status::text, response_json, error_json,
                         deadline_at_ms, created_at_ms, ack_at_ms, finished_at_ms
                    FROM host_commands
@@ -239,9 +241,10 @@ pub async fn get(
             )
             .bind(command_id)
             .fetch_optional(pool)
-            .await,
+            .await
         }
-        .map_err(store_err("host_commands::get"))?;
+    }
+    .map_err(store_err("host_commands::get"))?;
 
     row.map(decode_row).transpose()
 }
@@ -249,8 +252,10 @@ pub async fn get(
 pub async fn ack(
     store: &impl AsStorePool,
     command_id: &str,
+    host_device_id: DeviceId,
     ack_at_ms: i64,
 ) -> Result<bool, BackendError> {
+    let host = host_device_id.to_string();
     let result = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => sqlx::query(
             "UPDATE host_commands
@@ -260,11 +265,13 @@ pub async fn ack(
                         END,
                         ack_at_ms = ?
                   WHERE command_id = ?
+                    AND host_device_id = ?
                     AND status IN ('pending', 'acked', 'succeeded', 'failed')
                     AND ack_at_ms IS NULL",
         )
         .bind(ack_at_ms)
         .bind(command_id)
+        .bind(&host)
         .execute(pool)
         .await
         .map(|result| result.rows_affected()),
@@ -276,11 +283,13 @@ pub async fn ack(
                         END,
                         ack_at_ms = $1
                   WHERE command_id = $2
+                    AND host_device_id = $3
                     AND status IN ('pending', 'acked', 'succeeded', 'failed')
                     AND ack_at_ms IS NULL",
         )
         .bind(ack_at_ms)
         .bind(command_id)
+        .bind(&host)
         .execute(pool)
         .await
         .map(|result| result.rows_affected()),
@@ -293,11 +302,13 @@ pub async fn ack(
 pub async fn finish(
     store: &impl AsStorePool,
     command_id: &str,
+    host_device_id: DeviceId,
     status: HostCommandTerminalStatus,
     response_json: Option<&Value>,
     error_json: Option<&Value>,
     finished_at_ms: i64,
 ) -> Result<bool, BackendError> {
+    let host = host_device_id.to_string();
     let response_json = response_json
         .map(|value| serialize_json(value, "host_commands::finish.response_json"))
         .transpose()?;
@@ -310,6 +321,7 @@ pub async fn finish(
             "UPDATE host_commands
                     SET status = ?, response_json = ?, error_json = ?, finished_at_ms = ?
                   WHERE command_id = ?
+                    AND host_device_id = ?
                     AND finished_at_ms IS NULL
                     AND status IN ('pending', 'acked')",
         )
@@ -318,6 +330,7 @@ pub async fn finish(
         .bind(error_json.as_deref())
         .bind(finished_at_ms)
         .bind(command_id)
+        .bind(&host)
         .execute(pool)
         .await
         .map(|result| result.rows_affected()),
@@ -325,6 +338,7 @@ pub async fn finish(
             "UPDATE host_commands
                     SET status = $1, response_json = $2, error_json = $3, finished_at_ms = $4
                   WHERE command_id = $5
+                    AND host_device_id = $6
                     AND finished_at_ms IS NULL
                     AND status IN ('pending', 'acked')",
         )
@@ -333,6 +347,7 @@ pub async fn finish(
         .bind(error_json.as_deref())
         .bind(finished_at_ms)
         .bind(command_id)
+        .bind(&host)
         .execute(pool)
         .await
         .map(|result| result.rows_affected()),
@@ -346,10 +361,10 @@ pub async fn list_timed_out_open(
     now_ms: i64,
     limit: u32,
 ) -> Result<Vec<HostCommandRow>, BackendError> {
-    let rows =
-        match store.as_store_pool() {
-            StorePoolRef::Sqlite(pool) => sqlx::query_as::<_, HostCommandRowTuple>(
-                "SELECT command_id, host_installation_id, agent_session_id, method, params_json,
+    let rows = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_as::<_, HostCommandRowTuple>(
+                "SELECT command_id, host_device_id, agent_session_id, method, params_json,
                         requested_by_account_id, status, response_json, error_json,
                         deadline_at_ms, created_at_ms, ack_at_ms, finished_at_ms
                    FROM host_commands
@@ -362,9 +377,11 @@ pub async fn list_timed_out_open(
             .bind(now_ms)
             .bind(i64::from(limit))
             .fetch_all(pool)
-            .await,
-            StorePoolRef::Postgres(pool) => sqlx::query_as::<_, HostCommandRowTuple>(
-                "SELECT command_id, host_installation_id, agent_session_id, method, params_json,
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_as::<_, HostCommandRowTuple>(
+                "SELECT command_id, host_device_id, agent_session_id, method, params_json,
                         requested_by_account_id, status::text, response_json, error_json,
                         deadline_at_ms, created_at_ms, ack_at_ms, finished_at_ms
                    FROM host_commands
@@ -377,9 +394,10 @@ pub async fn list_timed_out_open(
             .bind(now_ms)
             .bind(i64::from(limit))
             .fetch_all(pool)
-            .await,
+            .await
         }
-        .map_err(store_err("host_commands::list_timed_out_open"))?;
+    }
+    .map_err(store_err("host_commands::list_timed_out_open"))?;
 
     rows.into_iter().map(decode_row).collect()
 }
@@ -431,7 +449,7 @@ pub async fn mark_timed_out(
 fn decode_row(row: HostCommandRowTuple) -> Result<HostCommandRow, BackendError> {
     let (
         command_id,
-        host_installation_id,
+        host_device_id,
         agent_session_id,
         method,
         params_json,
@@ -447,10 +465,10 @@ fn decode_row(row: HostCommandRowTuple) -> Result<HostCommandRow, BackendError> 
 
     Ok(HostCommandRow {
         command_id,
-        host_installation_id: Uuid::parse_str(&host_installation_id)
+        host_device_id: Uuid::parse_str(&host_device_id)
             .map(DeviceId)
             .map_err(|error| BackendError::StoreDecode {
-                column: "host_commands.host_installation_id".into(),
+                column: "host_commands.host_device_id".into(),
                 message: error.to_string(),
             })?,
         agent_session_id,
@@ -546,12 +564,13 @@ mod tests {
             serde_json::json!({ "decision": "approve" })
         );
 
-        assert!(ack(&pool, "cmd-1", T0 + 100).await.unwrap());
-        assert!(!ack(&pool, "cmd-1", T0 + 200).await.unwrap());
+        assert!(ack(&pool, "cmd-1", host, T0 + 100).await.unwrap());
+        assert!(!ack(&pool, "cmd-1", host, T0 + 200).await.unwrap());
 
         assert!(finish(
             &pool,
             "cmd-1",
+            host,
             HostCommandTerminalStatus::Succeeded,
             Some(&serde_json::json!({ "ok": true })),
             None,
@@ -589,6 +608,7 @@ mod tests {
         assert!(finish(
             &pool,
             "cmd-finish-before-ack",
+            host,
             HostCommandTerminalStatus::Succeeded,
             Some(&serde_json::json!({ "ok": true })),
             None,
@@ -596,7 +616,9 @@ mod tests {
         )
         .await
         .unwrap());
-        assert!(ack(&pool, "cmd-finish-before-ack", T0 + 100).await.unwrap());
+        assert!(ack(&pool, "cmd-finish-before-ack", host, T0 + 100)
+            .await
+            .unwrap());
 
         let row = get(&pool, "cmd-finish-before-ack").await.unwrap().unwrap();
         assert_eq!(row.status, HostCommandStatus::Succeeded);
@@ -661,5 +683,50 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
+    }
+
+    #[tokio::test]
+    async fn ack_and_finish_require_owning_host() {
+        let pool = memory_pool().await;
+        let owner = seed_host(&pool).await;
+        let other = seed_host(&pool).await;
+        enqueue(
+            &pool,
+            "cmd-owned",
+            owner,
+            None,
+            "minos_health",
+            &serde_json::Value::Null,
+            None,
+            T0 + 5_000,
+            T0,
+        )
+        .await
+        .unwrap();
+
+        assert!(!ack(&pool, "cmd-owned", other, T0 + 100).await.unwrap());
+        assert!(ack(&pool, "cmd-owned", owner, T0 + 100).await.unwrap());
+        assert!(!finish(
+            &pool,
+            "cmd-owned",
+            other,
+            HostCommandTerminalStatus::Succeeded,
+            Some(&serde_json::json!({ "ok": true })),
+            None,
+            T0 + 300,
+        )
+        .await
+        .unwrap());
+        assert!(finish(
+            &pool,
+            "cmd-owned",
+            owner,
+            HostCommandTerminalStatus::Succeeded,
+            Some(&serde_json::json!({ "ok": true })),
+            None,
+            T0 + 300,
+        )
+        .await
+        .unwrap());
     }
 }

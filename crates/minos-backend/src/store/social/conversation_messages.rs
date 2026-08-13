@@ -489,6 +489,7 @@ pub async fn insert_message_with_id_in_tx(
 
     let message_id = match client_message_id.map(str::trim).filter(|s| !s.is_empty()) {
         Some(id) => {
+            let id = validate_client_message_id(id)?;
             // Must read on the open tx — SQLite test pools are single-connection.
             if let Some(existing) = get_message_in_tx(tx, id).await? {
                 // Idempotency key is (sender, client_message_id) + request fingerprint.
@@ -704,6 +705,44 @@ async fn insert_mention_rows_postgres(
         agent_ordinal += 1;
     }
     Ok(())
+}
+
+/// Fail-closed validation for untrusted `client_message_id` values.
+///
+/// Clients mint UUIDs / `msg_<uuid>` / `react-…` keys; host projection uses
+/// `agent-result:{conv}:{session}:{origin}` (colons required). Reject path
+/// separators, `..`, empty/overlong, and any charset outside
+/// `[A-Za-z0-9_.:-]{1,256}` so ids cannot be used as filesystem escapes
+/// downstream.
+pub fn validate_client_message_id(id: &str) -> Result<&str, BackendError> {
+    const MAX_LEN: usize = 256;
+    if id.is_empty() || id.len() > MAX_LEN {
+        return Err(invalid_client_message_id(
+            id,
+            "must be 1..=256 chars of [A-Za-z0-9_.:-]",
+        ));
+    }
+    if id == "." || id == ".." {
+        return Err(invalid_client_message_id(id, "must not be '.' or '..'"));
+    }
+    if !id
+        .bytes()
+        .all(|b| matches!(b, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_' | b'.' | b':' | b'-'))
+    {
+        return Err(invalid_client_message_id(
+            id,
+            "must match [A-Za-z0-9_.:-]{1,256}",
+        ));
+    }
+    Ok(id)
+}
+
+fn invalid_client_message_id(id: &str, detail: &str) -> BackendError {
+    let preview: String = id.chars().take(64).collect();
+    BackendError::StoreQuery {
+        operation: "social::insert_message_with_id.invalid_client_message_id".into(),
+        message: format!("invalid client_message_id '{preview}': {detail}"),
+    }
 }
 
 fn normalize_message_source(source: &str) -> &'static str {
@@ -1086,4 +1125,51 @@ pub async fn recall_message_in_tx(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_client_message_id;
+
+    #[test]
+    fn accepts_uuid_and_client_prefixed_ids() {
+        assert!(validate_client_message_id("550e8400-e29b-41d4-a716-446655440000").is_ok());
+        assert!(validate_client_message_id("msg_550e8400-e29b-41d4-a716-446655440000").is_ok());
+        assert!(validate_client_message_id("msg-disabled-sole-1").is_ok());
+        assert!(validate_client_message_id("react-171000-42").is_ok());
+        assert!(
+            validate_client_message_id("approval-550e8400-e29b-41d4-a716-446655440000").is_ok()
+        );
+    }
+
+    #[test]
+    fn accepts_agent_result_formula_with_colons() {
+        assert!(validate_client_message_id("agent-result:conv:sess:origin-msg").is_ok());
+        assert!(validate_client_message_id(
+            "agent-result:550e8400-e29b-41d4-a716-446655440000:sess:msg_abc"
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn rejects_path_escape_and_junk() {
+        let overlong = "a".repeat(257);
+        for bad in [
+            "",
+            ".",
+            "..",
+            "../etc/passwd",
+            "/tmp/x",
+            "foo/bar",
+            "foo\\bar",
+            "has space",
+            "null\0byte",
+            overlong.as_str(),
+        ] {
+            assert!(
+                validate_client_message_id(bad).is_err(),
+                "expected reject for {bad:?}"
+            );
+        }
+    }
 }

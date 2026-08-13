@@ -78,7 +78,7 @@ struct ListHostsData {
 /// returned; callers that still need a `paired_via_device_id` get a nil id.
 #[derive(Debug, Deserialize)]
 struct FormalHostSummary {
-    host_installation_id: String,
+    host_device_id: String,
     host_display_name: String,
     linked_at_ms: i64,
     #[serde(default)]
@@ -96,7 +96,7 @@ struct SupabaseExchangeRequest<'a> {
 
 #[derive(Debug, Serialize)]
 struct UnlinkHostRequest {
-    host_installation_id: String,
+    host_device_id: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -349,7 +349,7 @@ impl MobileHttpClient {
         let url = format!("{}{path}", self.base);
         let trace_id = start_http_trace(Method::POST.as_str(), path, None, None);
         let body = UnlinkHostRequest {
-            host_installation_id: host_device_id.to_string(),
+            host_device_id: host_device_id.to_string(),
         };
         let request = self.request_with_json(Method::POST, &url, Some(access_token), &body)?;
         let resp = self.execute_with_trace(trace_id, &url, request).await?;
@@ -1736,14 +1736,14 @@ impl MobileHttpClient {
     pub async fn fetch_ws_ticket(
         &self,
         access_token: &str,
-        installation_id: &str,
+        device_id: &str,
     ) -> Result<RealtimeWsTicketResponse, MinosError> {
         let path = "/v1/realtime/ws-ticket";
         let url = format!("{}{path}", self.base);
         let trace_id =
             start_http_trace(Method::POST.as_str(), path, None, Some("ws-ticket".into()));
         let body = RealtimeWsTicketRequest {
-            installation_id: Some(installation_id.to_string()),
+            device_id: Some(device_id.to_string()),
         };
         let request = self.request_with_json(Method::POST, &url, Some(access_token), &body)?;
         let resp = self.execute_with_trace(trace_id, &url, request).await?;
@@ -2198,10 +2198,7 @@ fn formal_hosts_to_me_hosts(data: ListHostsData) -> Result<MeHostsResponse, Mino
     let mut hosts = Vec::with_capacity(data.hosts.len());
     for host in data.hosts {
         hosts.push(HostSummary {
-            host_device_id: parse_device_id_field(
-                "host_installation_id",
-                &host.host_installation_id,
-            )?,
+            host_device_id: parse_device_id_field("host_device_id", &host.host_device_id)?,
             host_display_name: host.host_display_name,
             paired_at_ms: host.linked_at_ms,
             // Host Link list does not report the linking client installation.
@@ -2781,7 +2778,7 @@ mod tests {
 
         let response = formal_hosts_to_me_hosts(ListHostsData {
             hosts: vec![FormalHostSummary {
-                host_installation_id: host_id.to_string(),
+                host_device_id: host_id.to_string(),
                 host_display_name: "Mac Studio".into(),
                 linked_at_ms: 123,
                 online: true,
@@ -2806,7 +2803,7 @@ mod tests {
     fn formal_hosts_response_rejects_bad_device_ids() {
         let err = formal_hosts_to_me_hosts(ListHostsData {
             hosts: vec![FormalHostSummary {
-                host_installation_id: "not-a-uuid".into(),
+                host_device_id: "not-a-uuid".into(),
                 host_display_name: "Mac Studio".into(),
                 linked_at_ms: 123,
                 online: false,
@@ -2816,7 +2813,7 @@ mod tests {
         .expect_err("invalid host id must not be silently accepted");
 
         assert!(
-            matches!(err, MinosError::BackendInternal { ref message } if message.contains("host_installation_id")),
+            matches!(err, MinosError::BackendInternal { ref message } if message.contains("host_device_id")),
             "unexpected error: {err:?}"
         );
     }

@@ -8,13 +8,13 @@ void main() {
         'data': {
           'hosts': [
             {
-              'host_installation_id': '11111111-1111-1111-1111-111111111111',
+              'host_device_id': '11111111-1111-1111-1111-111111111111',
               'host_display_name': 'MacBook Pro',
               'linked_at_ms': 1700000000000,
               'online': true,
             },
             {
-              'host_installation_id': '22222222-2222-2222-2222-222222222222',
+              'host_device_id': '22222222-2222-2222-2222-222222222222',
               'host_display_name': 'Studio',
               'linked_at_ms': 1700000001000,
               'online': false,
@@ -39,7 +39,7 @@ void main() {
 
     test('maps last_seen_at_ms for offline device display', () {
       final host = mapHostSummaryJson({
-        'host_installation_id': 'cccccccc-cccc-cccc-cccc-cccccccccccc',
+        'host_device_id': 'cccccccc-cccc-cccc-cccc-cccccccccccc',
         'host_display_name': 'Idle',
         'linked_at_ms': 100,
         'online': false,
@@ -53,7 +53,7 @@ void main() {
       final hosts = mapHostsListResponse({
         'hosts': [
           {
-            'host_installation_id': 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+            'host_device_id': 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
             'host_display_name': 'Bare',
             'linked_at_ms': 1,
             'online': true,
@@ -66,7 +66,7 @@ void main() {
 
     test('accepts paired_at_ms alias for linked_at_ms', () {
       final host = mapHostSummaryJson({
-        'host_installation_id': 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+        'host_device_id': 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
         'host_display_name': 'Legacy',
         'paired_at_ms': 42,
         'online': false,
@@ -74,7 +74,7 @@ void main() {
       expect(host.linkedAtMs, 42);
     });
 
-    test('throws when host_installation_id missing', () {
+    test('throws when host_device_id missing', () {
       expect(
         () => mapHostSummaryJson({
           'host_display_name': 'x',

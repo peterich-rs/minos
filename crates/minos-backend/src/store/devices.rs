@@ -1,11 +1,11 @@
-//! `device_installations` table CRUD.
+//! `devices` table CRUD.
 //!
 //! ## Storage vs wire
 //!
-//! Rows store `installation_kind` (`mobile`/`browser`/`desktop`/`host`).
+//! Rows store `device_kind` (`mobile`/`browser`/`desktop`/`host`).
 //! The Rust API continues to speak wire [`DeviceRole`]
 //! (`mobile-client`/…/`agent-host`) and maps at the boundary via
-//! [`DeviceRole::to_installation_kind`] / [`DeviceRole::from_installation_kind`].
+//! [`DeviceRole::to_device_kind`] / [`DeviceRole::from_device_kind`].
 //!
 //! Column names match Postgres; SQLite uses the same names so both backends
 //! share SQL shape (placeholder dialect only differs).
@@ -18,7 +18,7 @@ use crate::error::BackendError;
 use crate::store::{AsStorePool, StorePoolRef};
 
 type InstallationRowTuple = (
-    String,         // installation_id
+    String,         // device_id
     String,         // kind
     Option<String>, // display_name
     Option<String>, // public_key
@@ -27,11 +27,7 @@ type InstallationRowTuple = (
     Option<String>, // account_id
 );
 
-/// A single installation row after decoding into domain types.
-///
-/// Field names keep the historical `device_*` vocabulary used across HTTP
-/// auth and pairing so call sites stay stable; the underlying table is
-/// `device_installations`.
+/// One device row (`devices`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceRow {
     pub device_id: DeviceId,
@@ -62,12 +58,12 @@ where
     E: Executor<'e, Database = Sqlite>,
 {
     let id_str = id.to_string();
-    let kind = DeviceRole::AgentHost.to_installation_kind();
+    let kind = DeviceRole::AgentHost.to_device_kind();
 
     sqlx::query(
         r#"
-        INSERT INTO device_installations
-            (installation_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id)
+        INSERT INTO devices
+            (device_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id)
         VALUES (?, ?, ?, ?, ?, ?, NULL)
         "#,
     )
@@ -99,13 +95,13 @@ pub async fn insert_host_with_public_key(
     now: i64,
 ) -> Result<(), BackendError> {
     let id_str = id.to_string();
-    let kind = DeviceRole::AgentHost.to_installation_kind();
+    let kind = DeviceRole::AgentHost.to_device_kind();
     let result = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
             sqlx::query(
                 r#"
-                INSERT INTO device_installations
-                    (installation_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id)
+                INSERT INTO devices
+                    (device_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id)
                 VALUES (?, ?, ?, ?, ?, ?, NULL)
                 "#,
             )
@@ -122,9 +118,9 @@ pub async fn insert_host_with_public_key(
         StorePoolRef::Postgres(pool) => {
             sqlx::query(
                 r#"
-                INSERT INTO device_installations
-                    (installation_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id)
-                VALUES ($1, $2::installation_kind, $3, $4, $5, $6, NULL)
+                INSERT INTO devices
+                    (device_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id)
+                VALUES ($1, $2::device_kind, $3, $4, $5, $6, NULL)
                 "#,
             )
             .bind(&id_str)
@@ -164,13 +160,13 @@ pub async fn insert_client_for_account(
         });
     }
     let id_str = id.to_string();
-    let kind = role.to_installation_kind();
+    let kind = role.to_device_kind();
     let result = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
             sqlx::query(
                 r#"
-                INSERT INTO device_installations
-                    (installation_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id)
+                INSERT INTO devices
+                    (device_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id)
                 VALUES (?, ?, ?, NULL, ?, ?, ?)
                 "#,
             )
@@ -187,9 +183,9 @@ pub async fn insert_client_for_account(
         StorePoolRef::Postgres(pool) => {
             sqlx::query(
                 r#"
-                INSERT INTO device_installations
-                    (installation_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id)
-                VALUES ($1, $2::installation_kind, $3, NULL, $4, $5, $6)
+                INSERT INTO devices
+                    (device_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id)
+                VALUES ($1, $2::device_kind, $3, NULL, $4, $5, $6)
                 "#,
             )
             .bind(&id_str)
@@ -222,21 +218,21 @@ pub async fn set_account_id(
     let id_str = device_id.to_string();
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
-            sqlx::query("UPDATE device_installations SET account_id = ? WHERE installation_id = ?")
+            sqlx::query("UPDATE devices SET account_id = ? WHERE device_id = ?")
                 .bind(account_id)
                 .bind(&id_str)
                 .execute(pool)
                 .await
                 .map(|_| ())
         }
-        StorePoolRef::Postgres(pool) => sqlx::query(
-            "UPDATE device_installations SET account_id = $1 WHERE installation_id = $2",
-        )
-        .bind(account_id)
-        .bind(&id_str)
-        .execute(pool)
-        .await
-        .map(|_| ()),
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query("UPDATE devices SET account_id = $1 WHERE device_id = $2")
+                .bind(account_id)
+                .bind(&id_str)
+                .execute(pool)
+                .await
+                .map(|_| ())
+        }
     }
     .map_err(|e| BackendError::StoreQuery {
         operation: "set_account_id".to_string(),
@@ -253,22 +249,22 @@ pub async fn set_display_name(
 ) -> Result<(), BackendError> {
     let id_str = device_id.to_string();
     match store.as_store_pool() {
-        StorePoolRef::Sqlite(pool) => sqlx::query(
-            "UPDATE device_installations SET display_name = ? WHERE installation_id = ?",
-        )
-        .bind(display_name)
-        .bind(&id_str)
-        .execute(pool)
-        .await
-        .map(|_| ()),
-        StorePoolRef::Postgres(pool) => sqlx::query(
-            "UPDATE device_installations SET display_name = $1 WHERE installation_id = $2",
-        )
-        .bind(display_name)
-        .bind(&id_str)
-        .execute(pool)
-        .await
-        .map(|_| ()),
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query("UPDATE devices SET display_name = ? WHERE device_id = ?")
+                .bind(display_name)
+                .bind(&id_str)
+                .execute(pool)
+                .await
+                .map(|_| ())
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query("UPDATE devices SET display_name = $1 WHERE device_id = $2")
+                .bind(display_name)
+                .bind(&id_str)
+                .execute(pool)
+                .await
+                .map(|_| ())
+        }
     }
     .map_err(|e| BackendError::StoreQuery {
         operation: "set_display_name".to_string(),
@@ -287,22 +283,22 @@ pub async fn touch_last_seen(
 ) -> Result<(), BackendError> {
     let id_str = device_id.to_string();
     let rows_affected = match store.as_store_pool() {
-        StorePoolRef::Sqlite(pool) => sqlx::query(
-            "UPDATE device_installations SET last_seen_at_ms = ? WHERE installation_id = ?",
-        )
-        .bind(at_ms)
-        .bind(&id_str)
-        .execute(pool)
-        .await
-        .map(|result| result.rows_affected()),
-        StorePoolRef::Postgres(pool) => sqlx::query(
-            "UPDATE device_installations SET last_seen_at_ms = $1 WHERE installation_id = $2",
-        )
-        .bind(at_ms)
-        .bind(&id_str)
-        .execute(pool)
-        .await
-        .map(|result| result.rows_affected()),
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query("UPDATE devices SET last_seen_at_ms = ? WHERE device_id = ?")
+                .bind(at_ms)
+                .bind(&id_str)
+                .execute(pool)
+                .await
+                .map(|result| result.rows_affected())
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query("UPDATE devices SET last_seen_at_ms = $1 WHERE device_id = $2")
+                .bind(at_ms)
+                .bind(&id_str)
+                .execute(pool)
+                .await
+                .map(|result| result.rows_affected())
+        }
     }
     .map_err(|e| BackendError::StoreQuery {
         operation: "touch_last_seen".to_string(),
@@ -340,9 +336,9 @@ where
 
     let row = sqlx::query_as::<_, InstallationRowTuple>(
         r#"
-        SELECT installation_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id
-        FROM device_installations
-        WHERE installation_id = ?
+        SELECT device_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id
+        FROM devices
+        WHERE device_id = ?
         "#,
     )
     .bind(&id_str)
@@ -369,8 +365,8 @@ pub async fn list_by_account(
         StorePoolRef::Sqlite(pool) => {
             sqlx::query_as::<_, InstallationRowTuple>(
                 r#"
-                SELECT installation_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id
-                FROM device_installations
+                SELECT device_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id
+                FROM devices
                 WHERE account_id = ?
                 ORDER BY created_at_ms ASC
                 "#,
@@ -382,8 +378,8 @@ pub async fn list_by_account(
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, InstallationRowTuple>(
                 r#"
-                SELECT installation_id, kind::text, display_name, public_key, created_at_ms, last_seen_at_ms, account_id
-                FROM device_installations
+                SELECT device_id, kind::text, display_name, public_key, created_at_ms, last_seen_at_ms, account_id
+                FROM devices
                 WHERE account_id = $1
                 ORDER BY created_at_ms ASC
                 "#,
@@ -405,13 +401,13 @@ pub async fn latest_mobile_for_account(
     store: &impl AsStorePool,
     account_id: &str,
 ) -> Result<Option<DeviceRow>, BackendError> {
-    let kind = DeviceRole::MobileClient.to_installation_kind();
+    let kind = DeviceRole::MobileClient.to_device_kind();
     let row = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
             sqlx::query_as::<_, InstallationRowTuple>(
                 r#"
-                SELECT installation_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id
-                FROM device_installations
+                SELECT device_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id
+                FROM devices
                 WHERE account_id = ? AND kind = ?
                 ORDER BY last_seen_at_ms DESC, created_at_ms DESC
                 LIMIT 1
@@ -425,9 +421,9 @@ pub async fn latest_mobile_for_account(
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, InstallationRowTuple>(
                 r#"
-                SELECT installation_id, kind::text, display_name, public_key, created_at_ms, last_seen_at_ms, account_id
-                FROM device_installations
-                WHERE account_id = $1 AND kind = $2::installation_kind
+                SELECT device_id, kind::text, display_name, public_key, created_at_ms, last_seen_at_ms, account_id
+                FROM devices
+                WHERE account_id = $1 AND kind = $2::device_kind
                 ORDER BY last_seen_at_ms DESC, created_at_ms DESC
                 LIMIT 1
                 "#,
@@ -458,8 +454,8 @@ pub async fn set_public_key_if_absent(
     let id_str = device_id.to_string();
     let result = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => sqlx::query(
-            "UPDATE device_installations SET public_key = ? \
-             WHERE installation_id = ? AND public_key IS NULL",
+            "UPDATE devices SET public_key = ? \
+             WHERE device_id = ? AND public_key IS NULL",
         )
         .bind(public_key)
         .bind(&id_str)
@@ -467,8 +463,8 @@ pub async fn set_public_key_if_absent(
         .await
         .map(|result| result.rows_affected()),
         StorePoolRef::Postgres(pool) => sqlx::query(
-            "UPDATE device_installations SET public_key = $1 \
-             WHERE installation_id = $2 AND public_key IS NULL",
+            "UPDATE devices SET public_key = $1 \
+             WHERE device_id = $2 AND public_key IS NULL",
         )
         .bind(public_key)
         .bind(&id_str)
@@ -485,19 +481,18 @@ pub async fn set_public_key_if_absent(
 }
 
 fn decode_installation_row(row: InstallationRowTuple) -> Result<DeviceRow, BackendError> {
-    let (installation_id, kind, display_name, public_key, created_at, last_seen_at, account_id) =
-        row;
-    let device_id = Uuid::parse_str(&installation_id)
-        .map(DeviceId)
-        .map_err(|e| BackendError::StoreDecode {
-            column: "device_installations.installation_id".to_string(),
-            message: e.to_string(),
-        })?;
-    let role =
-        DeviceRole::from_installation_kind(&kind).map_err(|e| BackendError::StoreDecode {
-            column: "device_installations.kind".to_string(),
-            message: e,
-        })?;
+    let (device_id, kind, display_name, public_key, created_at, last_seen_at, account_id) = row;
+    let device_id =
+        Uuid::parse_str(&device_id)
+            .map(DeviceId)
+            .map_err(|e| BackendError::StoreDecode {
+                column: "devices.device_id".to_string(),
+                message: e.to_string(),
+            })?;
+    let role = DeviceRole::from_device_kind(&kind).map_err(|e| BackendError::StoreDecode {
+        column: "devices.kind".to_string(),
+        message: e,
+    })?;
 
     Ok(DeviceRow {
         device_id,
@@ -518,9 +513,9 @@ async fn get_device_postgres(
 
     let row = sqlx::query_as::<_, InstallationRowTuple>(
         r#"
-        SELECT installation_id, kind::text, display_name, public_key, created_at_ms, last_seen_at_ms, account_id
-        FROM device_installations
-        WHERE installation_id = $1
+        SELECT device_id, kind::text, display_name, public_key, created_at_ms, last_seen_at_ms, account_id
+        FROM devices
+        WHERE device_id = $1
         "#,
     )
     .bind(&id_str)
@@ -690,7 +685,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn insert_device_stores_kind_as_installation_kind() {
+    async fn insert_device_stores_kind_as_device_kind() {
         let pool = memory_pool().await;
         let account = crate::store::accounts::create(&pool, "kind@example.com")
             .await
@@ -708,12 +703,11 @@ mod tests {
         .unwrap();
 
         let id_str = id.to_string();
-        let raw_kind: String =
-            sqlx::query_scalar("SELECT kind FROM device_installations WHERE installation_id = ?")
-                .bind(&id_str)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let raw_kind: String = sqlx::query_scalar("SELECT kind FROM devices WHERE device_id = ?")
+            .bind(&id_str)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(raw_kind, "browser");
     }
 
@@ -824,13 +818,11 @@ mod tests {
         .await
         .unwrap();
         let (kind, account_id, public_key): (String, Option<String>, Option<String>) =
-            sqlx::query_as(
-                "SELECT kind, account_id, public_key FROM device_installations WHERE installation_id = ?",
-            )
-            .bind(id.to_string())
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+            sqlx::query_as("SELECT kind, account_id, public_key FROM devices WHERE device_id = ?")
+                .bind(id.to_string())
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(kind, "desktop");
         assert_eq!(account_id.as_deref(), Some(account.account_id.as_str()));
         assert!(public_key.is_none());

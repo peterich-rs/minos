@@ -51,6 +51,9 @@ pub struct AuthResp {
     pub access_token: String,
     pub refresh_token: String,
     pub expires_in: i64,
+    /// Present for Desktop login: host_token bound to this DeviceId + account.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_token: Option<String>,
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -142,6 +145,7 @@ fn auth_session_response(session: AuthSession) -> Response {
             access_token: session.access_token,
             refresh_token: session.refresh_token,
             expires_in: session.expires_in,
+            host_token: session.host_token,
         }),
     )
         .into_response()
