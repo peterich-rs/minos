@@ -8,7 +8,7 @@
 |----|-----|
 | 源码路径 | `apps/desktop/` |
 | 产品定位 | **Conversation 协作工作台**（Timeline 主舞台；Agent 为对话内 **bot 成员**；Session/Approval 为 Attention）。**account-first** 登录即绑定本机 Host 控制权。手机远程驱动 bot 依赖 **Host online**（`/ws/host`）；人类多端聊天依赖 **Account IM**（`/ws/client` + Hub）。见 [ADR 0021](adr/0021-agent-as-conversation-bot-participant.md) |
-| 当前阶段 | **Daemon-backed**：Tauri 嵌 daemon。**根门禁 account-first**：`hydrateAuth` → 无 session 则 `LoginPage`。登录后 `ensureCloudConnection`（host link + dial `/ws/host`）。**双角色**：Account UI → `/ws/client` 发/收 Hub 消息；daemon → `/ws/host` 作 bot runtime。**Online 组合**：主状态 = Account IM sync（`accountSyncStatus` / `/ws/client`）；次状态 = Host readiness（`cloudStatus` / `cloudOnline`）。禁止仅 Host live 显示可发送 Online。无 Link/Unlink 主路径。Hub `conversation_id` 透传 Host（禁止假 Direct session） |
+| 当前阶段 | **Daemon-backed**：Tauri 嵌 daemon。**根门禁 account-first**：`hydrateAuth` → 无 session 则 `LoginPage`。登录同事务签发 `host_token`（绑本机 `DeviceId` + account）。**双角色均在 Rust**：Account IM → `/ws/client` Bearer access JWT；daemon → `/ws/host` Bearer `host_token`。Keychain 存 `DeviceId` / refresh / `host_token`（AfterFirstUnlock，不弹窗）。TS 只投影 UI。**Online 组合**：主状态 = Account IM sync；次状态 = Host readiness。禁止仅 Host live 显示可发送 Online。无 Link/Unlink 主路径。Hub `conversation_id` 透传 Host（禁止假 Direct session） |
 | 视觉 | 暖色多栏（参考 `res/desktop.jpeg` 气质，非客服 Inbox 语义） |
 | Buzz 借鉴清单 | [desktop-buzz-reference.md](./desktop-buzz-reference.md)（UI / 架构 / 组件 / 逻辑可复刻项与 P0–P2 路线图） |
 

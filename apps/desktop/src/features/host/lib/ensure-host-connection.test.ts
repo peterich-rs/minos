@@ -9,14 +9,14 @@ import {
 function ports(overrides: Partial<EnsureHostPorts> = {}): EnsureHostPorts {
   return {
     prepareLink: async () => ({
-      installationId: "host-1",
+      deviceId: "host-1",
       publicKey: "ed25519:pk",
       nonce: "nonce_abc",
     }),
     signLinkProof: async () => ({ signature: "ed25519-sig:sig" }),
     applyLinkToken: async () => ({ linked: true }),
     registerHost: async () => ({
-      hostInstallationId: "host-1",
+      hostDeviceId: "host-1",
       hostInstallationToken: "hit_token",
       pairId: "pair-1",
       accountId: "acc-1",
@@ -35,7 +35,7 @@ describe("registerHostCredential", () => {
         prepareLink: async () => {
           calls.push("prepare");
           return {
-            installationId: "host-1",
+            deviceId: "host-1",
             publicKey: "ed25519:pk",
             nonce: "nonce_abc",
           };
@@ -45,9 +45,9 @@ describe("registerHostCredential", () => {
           return { signature: "ed25519-sig:sig" };
         },
         registerHost: async (input) => {
-          calls.push(`cloud:${input.installationId}`);
+          calls.push(`cloud:${input.deviceId}`);
           return {
-            hostInstallationId: "host-1",
+            hostDeviceId: "host-1",
             hostInstallationToken: "hit_token",
             pairId: "pair-1",
             accountId: "acc-1",

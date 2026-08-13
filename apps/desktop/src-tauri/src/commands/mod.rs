@@ -1,5 +1,6 @@
 //! Tauri command handlers, split by domain.
 
+mod account;
 mod agents;
 mod app;
 mod approvals;
@@ -11,6 +12,7 @@ mod projects;
 mod sessions;
 mod updater;
 
+pub use account::*;
 pub use agents::*;
 pub use app::*;
 pub use approvals::*;

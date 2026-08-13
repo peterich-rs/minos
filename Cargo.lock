@@ -4343,10 +4343,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "chrono",
  "clap",
  "ctrlc",
  "dirs 5.0.1",
  "futures",
+ "futures-util",
+ "http 1.5.0",
  "jsonrpsee",
  "minisign-verify",
  "minos-chat-store",
@@ -4354,7 +4357,9 @@ dependencies = [
  "minos-domain",
  "minos-protocol",
  "minos-ui-protocol",
+ "reqwest 0.12.28",
  "rusqlite",
+ "security-framework",
  "serde",
  "serde_json",
  "tauri",
@@ -4366,9 +4371,13 @@ dependencies = [
  "tauri-plugin-updater",
  "tauri-plugin-window-state",
  "tempfile",
+ "thiserror 2.0.19",
  "tokio",
+ "tokio-tungstenite 0.29.0",
  "tracing",
  "tracing-subscriber",
+ "url",
+ "uuid",
 ]
 
 [[package]]

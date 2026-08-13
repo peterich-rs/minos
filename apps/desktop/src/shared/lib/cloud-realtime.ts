@@ -23,6 +23,7 @@ import {
   cloudClientWsUrl,
   type CloudChatMessage,
 } from "@/shared/lib/minos-cloud";
+import { isTauriRuntime } from "@/shared/lib/runtime";
 
 import {
   mapAccountDigest,
@@ -114,13 +115,13 @@ export type CloudRealtimeHandlers = {
   onSnapshotRequired?: (topic: string) => void;
   /** Account roster: host linked (T2). */
   onHostLinked?: (input: {
-    hostInstallationId: string;
+    hostDeviceId: string;
     pairId?: string;
     hostDisplayName?: string;
     atMs?: number;
   }) => void;
   /** Account roster: host unlinked (T2). */
-  onHostUnlinked?: (input: { hostInstallationId: string; atMs?: number }) => void;
+  onHostUnlinked?: (input: { hostDeviceId: string; atMs?: number }) => void;
   /** Gateway subscription cap (default 128). */
   onSubscriptionLimitExceeded?: (input: {
     limit: number;
@@ -164,6 +165,7 @@ export class CloudRealtimeSession {
       timer: ReturnType<typeof setTimeout>;
     }
   >();
+  private rustUnlisten: Array<() => void> = [];
 
   constructor(handlers: CloudRealtimeHandlers) {
     this.handlers = handlers;
@@ -203,7 +205,13 @@ export class CloudRealtimeSession {
     },
     opts?: { timeoutMs?: number },
   ): Promise<AppendMessageWsResult> {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+    const rustLive =
+      isTauriRuntime() &&
+      (this.syncState === "live" || this.syncState === "syncing");
+    if (
+      !rustLive &&
+      (!this.ws || this.ws.readyState !== WebSocket.OPEN)
+    ) {
       return Promise.resolve({ ok: false, reason: "socket" });
     }
     if (this.syncState !== "live" && this.syncState !== "syncing") {
@@ -240,7 +248,21 @@ export class CloudRealtimeSession {
       }, timeoutMs);
       this.appendWaiters.set(client_operation_id, { resolve, timer });
       try {
-        this.ws!.send(JSON.stringify(frame));
+        if (isTauriRuntime()) {
+          void import("@tauri-apps/api/core").then(({ invoke }) =>
+            invoke("account_ws_append", {
+              args: {
+                clientOperationId: client_operation_id,
+                conversationId: conversation_id,
+                text: input.text ?? "",
+                replyToMessageId: reply ?? null,
+                mentions: input.mentions ?? null,
+              },
+            }),
+          );
+        } else {
+          this.ws!.send(JSON.stringify(frame));
+        }
       } catch {
         clearTimeout(timer);
         this.appendWaiters.delete(client_operation_id);
@@ -371,6 +393,12 @@ export class CloudRealtimeSession {
   stop(): void {
     this.stopped = true;
     this.connectionEpoch += 1;
+    this.clearRustListeners();
+    if (isTauriRuntime()) {
+      void import("@tauri-apps/api/core").then(({ invoke }) =>
+        invoke("account_ws_stop"),
+      );
+    }
     this.clearTimers();
     this.conversationIds.clear();
     this.pendingSubscribeTopics.clear();
@@ -421,6 +449,12 @@ export class CloudRealtimeSession {
     this.conversationIds.clear();
     for (const cid of next) {
       this.conversationIds.set(cid, true);
+    }
+    if (isTauriRuntime()) {
+      void import("@tauri-apps/api/core").then(({ invoke }) =>
+        invoke("account_ws_subscribe", { conversationId: id }),
+      );
+      return;
     }
     this.sendSubscribe([conversationTopic(id)]);
   }
@@ -534,8 +568,60 @@ export class CloudRealtimeSession {
     );
   }
 
+  private clearRustListeners(): void {
+    for (const unlisten of this.rustUnlisten) {
+      try {
+        unlisten();
+      } catch {
+        /* ignore */
+      }
+    }
+    this.rustUnlisten = [];
+  }
+
+  private async connectViaRust(): Promise<void> {
+    if (!this.auth) return;
+    this.setState("connecting");
+    this.clearRustListeners();
+    try {
+      const { listen } = await import("@tauri-apps/api/event");
+      const { invoke } = await import("@tauri-apps/api/core");
+      this.rustUnlisten.push(
+        await listen<string>("account://frame", (event) => {
+          this.handleRaw(String(event.payload ?? ""));
+        }),
+      );
+      this.rustUnlisten.push(
+        await listen<{ state?: string }>("account://state", (event) => {
+          const next = event.payload?.state?.trim();
+          if (
+            next === "connecting" ||
+            next === "syncing" ||
+            next === "live" ||
+            next === "disconnected" ||
+            next === "error"
+          ) {
+            this.setState(next);
+          }
+        }),
+      );
+      await invoke("account_ws_start", {
+        accessToken: this.auth.accessToken,
+        accountId: this.auth.accountId,
+      });
+    } catch (error) {
+      console.warn("[cloud-realtime] rust account ws failed", error);
+      this.setState("error");
+      this.scheduleReconnect();
+    }
+  }
+
   private async connect(): Promise<void> {
     if (this.stopped || !this.auth) return;
+    if (isTauriRuntime()) {
+      await this.connectViaRust();
+      return;
+    }
     // Each connect attempt owns an epoch; stale ticket / open / close must no-op.
     const epoch = ++this.connectionEpoch;
     // Close any prior socket without letting its onclose clear the new attempt.
@@ -898,14 +984,14 @@ export class CloudRealtimeSession {
       eventKind === "HostLinked"
     ) {
       const p = payload as DurableMessagePayload & {
-        host_installation_id?: string;
+        host_device_id?: string;
         pair_id?: string;
         host_display_name?: string;
       };
-      const hostId = p.host_installation_id?.trim();
+      const hostId = p.host_device_id?.trim();
       if (!hostId) return false;
       this.handlers.onHostLinked?.({
-        hostInstallationId: hostId,
+        hostDeviceId: hostId,
         pairId: p.pair_id,
         hostDisplayName: p.host_display_name,
         atMs: p.at_ms,
@@ -918,12 +1004,12 @@ export class CloudRealtimeSession {
       eventKind === "HostUnlinked"
     ) {
       const p = payload as DurableMessagePayload & {
-        host_installation_id?: string;
+        host_device_id?: string;
       };
-      const hostId = p.host_installation_id?.trim();
+      const hostId = p.host_device_id?.trim();
       if (!hostId) return false;
       this.handlers.onHostUnlinked?.({
-        hostInstallationId: hostId,
+        hostDeviceId: hostId,
         atMs: p.at_ms,
       });
       return true;

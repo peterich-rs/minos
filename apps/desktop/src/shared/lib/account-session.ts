@@ -18,12 +18,14 @@ export type MinosSession = {
   issuedAtMs: number;
   /** Access token lifetime from exchange/refresh (`expires_in` seconds). */
   expiresInSec: number;
+  /** Device-bound host token from login (Rust Keychain is SSOT). */
+  hostToken?: string | null;
 };
 
 /** Internal bind snapshot for this Mac under one Minos account. */
 export type HostBindState = {
   bound: boolean;
-  hostInstallationId: string | null;
+  hostDeviceId: string | null;
   hostDisplayName: string | null;
   boundAtMs: number | null;
   pairId: string | null;
@@ -31,7 +33,7 @@ export type HostBindState = {
 
 export const EMPTY_HOST_BIND: HostBindState = {
   bound: false,
-  hostInstallationId: null,
+  hostDeviceId: null,
   hostDisplayName: null,
   boundAtMs: null,
   pairId: null,
@@ -122,9 +124,9 @@ function parseHostBind(raw: unknown): HostBindState | null {
   const parsed = raw as Record<string, unknown>;
   // Accept legacy { linked } shape.
   const bound = parsed.bound === true || parsed.linked === true;
-  const hostInstallationId =
-    typeof parsed.hostInstallationId === "string"
-      ? parsed.hostInstallationId
+  const hostDeviceId =
+    typeof parsed.hostDeviceId === "string"
+      ? parsed.hostDeviceId
       : null;
   const hostDisplayName =
     typeof parsed.hostDisplayName === "string" ? parsed.hostDisplayName : null;
@@ -137,7 +139,7 @@ function parseHostBind(raw: unknown): HostBindState | null {
   const pairId = typeof parsed.pairId === "string" ? parsed.pairId : null;
   return {
     bound,
-    hostInstallationId,
+    hostDeviceId,
     hostDisplayName,
     boundAtMs,
     pairId,
@@ -211,7 +213,7 @@ export function saveStoredHostBind(
   const map = readHostBindsMap();
   map[id] = {
     bound: bind.bound === true,
-    hostInstallationId: bind.hostInstallationId,
+    hostDeviceId: bind.hostDeviceId,
     hostDisplayName: bind.hostDisplayName,
     boundAtMs: bind.boundAtMs,
     pairId: bind.pairId,
@@ -226,7 +228,7 @@ export function saveStoredHostLink(
 ): void {
   saveStoredHostBind(accountId, {
     bound: link.bound === true || (link as { linked?: boolean }).linked === true,
-    hostInstallationId: link.hostInstallationId,
+    hostDeviceId: link.hostDeviceId,
     hostDisplayName: link.hostDisplayName,
     boundAtMs:
       link.boundAtMs ??
@@ -268,6 +270,7 @@ export function sessionFromAuthResponse(resp: {
   refresh_token: string;
   expires_in: number;
   issuedAtMs?: number;
+  host_token?: string | null;
 }): MinosSession {
   return {
     accountId: resp.account.account_id,
@@ -276,5 +279,6 @@ export function sessionFromAuthResponse(resp: {
     refreshToken: resp.refresh_token,
     issuedAtMs: resp.issuedAtMs ?? Date.now(),
     expiresInSec: resp.expires_in,
+    hostToken: resp.host_token ?? null,
   };
 }

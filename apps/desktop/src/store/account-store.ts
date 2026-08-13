@@ -40,6 +40,7 @@ import {
   type CloudMode,
 } from "@/shared/lib/host-status";
 import { daemonApi } from "@/shared/lib/daemon";
+import { isTauriRuntime } from "@/shared/lib/runtime";
 import { runHostEnsure } from "@/features/host/lib/host-connection-machine";
 import type { DesktopAuthPhase } from "@/shared/lib/desktop-root-gate";
 import {
@@ -210,8 +211,10 @@ function applyAuthSuccess(
   }
   saveStoredSession(session);
   const hostBind = loadStoredHostBind(session.accountId);
+  const hasHostToken = Boolean(session.hostToken?.trim());
   const hostOwned =
-    get().hostCredentialAccountId === nextAccountId && hostBind.bound;
+    hasHostToken ||
+    (get().hostCredentialAccountId === nextAccountId && hostBind.bound);
   set({
     session,
     hostBind,
@@ -228,8 +231,18 @@ function applyAuthSuccess(
   void import("@/store/im/im-cloud-bridge").then(({ ensureImCloudBridge }) =>
     ensureImCloudBridge(),
   );
+  if (hasHostToken) {
+    saveStoredHostBind(session.accountId, {
+      bound: true,
+      hostDeviceId: get().deviceId || null,
+      hostDisplayName: PROJECT_HOST_THIS_MAC,
+      boundAtMs: Date.now(),
+      pairId: null,
+    });
+  }
   const forceReregister =
-    !hostOwned || prevAccountId !== nextAccountId || !hostBind.bound;
+    !hasHostToken &&
+    (!hostOwned || prevAccountId !== nextAccountId || !hostBind.bound);
   scheduleAccessTokenRefresh(session);
   void get().ensureCloudConnection(
     forceReregister ? { forceReregister: true } : undefined,
@@ -261,6 +274,73 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
     const gen = ++hydrateGeneration;
     hydrateInFlight = (async () => {
       set({ authPhase: "booting", error: null });
+      if (isTauriRuntime()) {
+        try {
+          const { invoke } = await import("@tauri-apps/api/core");
+          const deviceId = await invoke<string>("account_device_id");
+          if (gen !== hydrateGeneration) return;
+          set({ deviceId });
+          const persisted = await invoke<{
+            accountId: string;
+            email: string;
+            refreshToken: string;
+            hostToken?: string | null;
+          } | null>("account_load_persisted");
+          if (!persisted?.refreshToken) {
+            if (gen !== hydrateGeneration) return;
+            set({
+              session: null,
+              hostBind: { ...EMPTY_HOST_BIND },
+              hostCredentialAccountId: null,
+              cloudStatus: "unknown",
+              accountSyncStatus: "unknown",
+              cloudError: null,
+              authPhase: "unauthenticated",
+              hydrated: true,
+            });
+            return;
+          }
+          const tokens = await invoke<{
+            accountId: string;
+            email: string;
+            accessToken: string;
+            refreshToken: string;
+            expiresIn: number;
+            hostToken?: string | null;
+          }>("account_refresh_session", {
+            refreshToken: persisted.refreshToken,
+          });
+          if (gen !== hydrateGeneration) return;
+          applyAuthSuccess(set, get, {
+            accountId: tokens.accountId,
+            email: tokens.email,
+            accessToken: tokens.accessToken,
+            refreshToken: tokens.refreshToken,
+            issuedAtMs: Date.now(),
+            expiresInSec: tokens.expiresIn,
+            hostToken: tokens.hostToken,
+          });
+          return;
+        } catch {
+          if (gen !== hydrateGeneration) return;
+          clearStoredSession();
+          ensureGeneration += 1;
+          ensureInFlight = null;
+          leaveAccountScope("auth-invalid");
+          set({
+            session: null,
+            hostBind: { ...EMPTY_HOST_BIND },
+            hostCredentialAccountId: null,
+            cloudStatus: "unknown",
+            accountSyncStatus: "unknown",
+            cloudError: null,
+            authPhase: "unauthenticated",
+            hydrated: true,
+            error: null,
+          });
+          return;
+        }
+      }
       const stored = loadStoredSession();
       if (!stored) {
         if (gen !== hydrateGeneration) return;
@@ -348,8 +428,33 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
           "Supabase is required (set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY).",
         );
       }
-      const deviceId = get().deviceId;
       const supabaseToken = await signInWithSupabasePassword(email, password);
+      if (isTauriRuntime()) {
+        const { invoke } = await import("@tauri-apps/api/core");
+        const auth = await invoke<{
+          accountId: string;
+          email: string;
+          accessToken: string;
+          refreshToken: string;
+          expiresIn: number;
+          hostToken?: string | null;
+          deviceId: string;
+        }>("account_exchange_supabase", {
+          supabaseAccessToken: supabaseToken,
+        });
+        set({ deviceId: auth.deviceId });
+        applyAuthSuccess(set, get, {
+          accountId: auth.accountId,
+          email: auth.email,
+          accessToken: auth.accessToken,
+          refreshToken: auth.refreshToken,
+          issuedAtMs: Date.now(),
+          expiresInSec: auth.expiresIn,
+          hostToken: auth.hostToken,
+        });
+        return true;
+      }
+      const deviceId = get().deviceId;
       const auth = await exchangeSupabaseSession(deviceId, supabaseToken);
       applyAuthSuccess(set, get, sessionFromAuthResponse(auth));
       return true;
@@ -368,8 +473,33 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
           "Supabase is required (set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY).",
         );
       }
-      const deviceId = get().deviceId;
       const supabaseToken = await signUpWithSupabasePassword(email, password);
+      if (isTauriRuntime()) {
+        const { invoke } = await import("@tauri-apps/api/core");
+        const auth = await invoke<{
+          accountId: string;
+          email: string;
+          accessToken: string;
+          refreshToken: string;
+          expiresIn: number;
+          hostToken?: string | null;
+          deviceId: string;
+        }>("account_exchange_supabase", {
+          supabaseAccessToken: supabaseToken,
+        });
+        set({ deviceId: auth.deviceId });
+        applyAuthSuccess(set, get, {
+          accountId: auth.accountId,
+          email: auth.email,
+          accessToken: auth.accessToken,
+          refreshToken: auth.refreshToken,
+          issuedAtMs: Date.now(),
+          expiresInSec: auth.expiresIn,
+          hostToken: auth.hostToken,
+        });
+        return true;
+      }
+      const deviceId = get().deviceId;
       const auth = await exchangeSupabaseSession(deviceId, supabaseToken);
       applyAuthSuccess(set, get, sessionFromAuthResponse(auth));
       return true;
@@ -391,7 +521,15 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
     bumpAccountScopeGeneration();
     if (session) {
       try {
-        await logoutSession(deviceId, session.accessToken, session.refreshToken);
+        if (isTauriRuntime()) {
+          const { invoke } = await import("@tauri-apps/api/core");
+          await invoke("account_sign_out", {
+            accessToken: session.accessToken,
+            refreshToken: session.refreshToken,
+          });
+        } else {
+          await logoutSession(deviceId, session.accessToken, session.refreshToken);
+        }
       } catch {
         // best-effort revoke
       }
@@ -448,8 +586,8 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
             (await refreshDaemonCloudFlags()).cloudOnline,
           registerPorts: {
             prepareLink: () => daemonApi.hostPrepareLink(),
-            signLinkProof: (installationId, nonce) =>
-              daemonApi.hostSignLinkProof(installationId, nonce),
+            signLinkProof: (deviceId, nonce) =>
+              daemonApi.hostSignLinkProof(deviceId, nonce),
             applyLinkToken: (token) => daemonApi.hostApplyLinkToken(token),
             registerHost: (input) =>
               cloudLinkHost(get().deviceId, session.accessToken, input),
@@ -491,7 +629,7 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
 
       const hostBind: HostBindState = {
         bound: true,
-        hostInstallationId: result.hostInstallationId,
+        hostDeviceId: result.hostDeviceId,
         hostDisplayName: result.hostDisplayName,
         boundAtMs: result.linkedAtMs,
         pairId: result.pairId,
