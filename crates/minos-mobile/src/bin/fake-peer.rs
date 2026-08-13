@@ -82,7 +82,7 @@ enum Cmd {
         agent: String,
         /// Optional host installation id; default = first online, else first linked.
         #[arg(long)]
-        host_installation_id: Option<String>,
+        host_device_id: Option<String>,
     },
 }
 
@@ -131,7 +131,7 @@ async fn main() -> Result<()> {
             prompt,
             device_name,
             agent,
-            host_installation_id,
+            host_device_id,
         } => {
             let _agent = parse_agent(&agent)?;
             run_smoke_session(
@@ -139,7 +139,7 @@ async fn main() -> Result<()> {
                 &supabase_access_token,
                 &prompt,
                 &device_name,
-                host_installation_id.as_deref(),
+                host_device_id.as_deref(),
             )
             .await
         }
@@ -194,7 +194,7 @@ async fn run_smoke_session(
     supabase_access_token: &str,
     prompt: &str,
     device_name: &str,
-    host_installation_id: Option<&str>,
+    host_device_id: Option<&str>,
 ) -> Result<()> {
     let auth = exchange_account(backend, supabase_access_token, device_name).await?;
     let http = MobileHttpClient::new(backend, auth.device_id, device_name)
@@ -203,7 +203,7 @@ async fn run_smoke_session(
         .list_hosts(&auth.access_token)
         .await
         .context("GET /v1/hosts")?;
-    let host = pick_host(&hosts.hosts, host_installation_id)?;
+    let host = pick_host(&hosts.hosts, host_device_id)?;
     eprintln!(
         "using host={} online={} name={}",
         host.host_device_id, host.online, host.host_display_name
@@ -264,7 +264,7 @@ fn pick_host(
             .iter()
             .find(|h| h.host_device_id.to_string() == id)
             .cloned()
-            .with_context(|| format!("host_installation_id {id} not in GET /v1/hosts"));
+            .with_context(|| format!("host_device_id {id} not in GET /v1/hosts"));
     }
     Ok(hosts
         .iter()

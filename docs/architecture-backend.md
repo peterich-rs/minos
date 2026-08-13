@@ -141,7 +141,7 @@
 | `POST /v1/hosts/unlink` | account bearer | 删 link、**始终**撤销 host tokens、kill `/ws/host`、清 peer cache |
 | `GET /v1/hosts` | account bearer | 列出本账户 hosts（`online` 来自 connection registry） |
 
-Link proof 签名载荷：`"{installation_id}:{nonce}:v1/hosts/link"`（无 leading slash）。Nonce 经 `POST /v1/host/bootstrap/nonce` 获取；多实例部署时 `BootstrapNonceStore` 走 Redis（与 `RealtimeTicketStore` 同 `MINOS_REDIS_URL`）。
+Link proof 签名载荷：`"{device_id}:{nonce}:v1/hosts/link"`（无 leading slash）。Nonce 经 `POST /v1/host/bootstrap/nonce` 获取；多实例部署时 `BootstrapNonceStore` 走 Redis（与 `RealtimeTicketStore` 同 `MINOS_REDIS_URL`）。
 
 `host already linked elsewhere` → **409** `host_linked_elsewhere`（Host Link 路径单 account↔host）。
 
@@ -214,10 +214,10 @@ Postgres 集成 smoke（默认 skip）：`MINOS_PG_TESTS=1 MINOS_DATABASE_URL=po
 | 表 | 用途 |
 |----|------|
 | `accounts` | 账户（email, supabase_sub, minos_id, display_name）— 无本地密码 |
-| `device_installations` | 安装（kind: mobile/browser/desktop/host, public_key, account_id） |
+| `devices` | 一台设备一行（`device_id`；kind: mobile/browser/desktop/host） |
 | `pairing_tokens` | 配对令牌（token_hash, issuer_device_id, expires_at） |
-| `host_links` | 配对码（code_hash, host_installation_id, status） |
-| `host_installation_tokens` | Host 安装令牌 |
+| `host_links` | 账户 ↔ 本机 DeviceId |
+| `host_tokens` | Host 票（hash + `host_device_id` + 绑定的 `account_id`） |
 | `refresh_tokens` | 刷新令牌 |
 | `host_links` | 账户-Host 关联 |
 | `friend_requests` | 好友请求 |
@@ -246,7 +246,7 @@ Postgres 集成 smoke（默认 skip）：`MINOS_PG_TESTS=1 MINOS_DATABASE_URL=po
 
 ### 30 个 Store 子模块
 
-涵盖: accounts, device_installations, tokens, host_links, host_installation_tokens, refresh_tokens, host_links, agent_sessions, agent_turns, agent_turn_events, approval_requests, host_commands, durable_event_log, outbox_events, sessions, raw_events, thread_sync_state, projects, push_tokens, notification_preferences, notification_cooldowns 等。
+涵盖: accounts, devices, host_tokens, host_links, refresh_tokens, agent_sessions, agent_turns, agent_turn_events, approval_requests, host_commands, durable_event_log, outbox_events, sessions, raw_events, thread_sync_state, projects, push_tokens, notification_preferences, notification_cooldowns 等。
 
 ## Agent 会话管理 (`src/agent_sessions/`)
 

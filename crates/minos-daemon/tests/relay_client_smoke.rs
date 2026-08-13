@@ -179,7 +179,7 @@ async fn register_formal_host(
         )
         .await;
     };
-    store::device_installations::set_account_id(pool, &mobile_id, &account.account_id).await?;
+    store::devices::set_account_id(pool, &mobile_id, &account.account_id).await?;
 
     let linked = HostLinkService::new(pool.clone())
         .link_host(host_id, &account.account_id, mobile_id, Some("Fan's Mac"))
@@ -266,8 +266,7 @@ async fn apply_link_token_persists_and_connects() -> anyhow::Result<()> {
         )
         .await;
     };
-    store::device_installations::set_account_id(&relay.pool, &mobile_id, &account.account_id)
-        .await?;
+    store::devices::set_account_id(&relay.pool, &mobile_id, &account.account_id).await?;
     let linked = HostLinkService::new(relay.pool.clone())
         .link_host(host_id, &account.account_id, mobile_id, Some(&mac_name))
         .await

@@ -26,7 +26,7 @@ pub fn router() -> Router<BackendState> {
 
 #[derive(Debug, Deserialize)]
 struct LinkHostRequest {
-    installation_id: String,
+    device_id: String,
     nonce: String,
     public_key: Option<String>,
     signature: String,
@@ -35,7 +35,7 @@ struct LinkHostRequest {
 
 #[derive(Debug, Serialize)]
 struct LinkHostData {
-    host_installation_id: String,
+    host_device_id: String,
     host_installation_token: String,
     link: LinkSummary,
 }
@@ -50,7 +50,7 @@ struct LinkSummary {
 
 #[derive(Debug, Deserialize)]
 struct UnlinkHostRequest {
-    host_installation_id: String,
+    host_device_id: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -60,11 +60,11 @@ struct ListHostsData {
 
 #[derive(Debug, Serialize)]
 struct HostSummary {
-    host_installation_id: String,
+    host_device_id: String,
     host_display_name: String,
     linked_at_ms: i64,
     online: bool,
-    /// Durable last activity from `device_installations.last_seen_at_ms`.
+    /// Durable last activity from `devices.last_seen_at_ms`.
     /// Live online is `registry`; cold path is this timestamp.
     last_seen_at_ms: i64,
 }
@@ -79,7 +79,7 @@ async fn post_link(
         (s, err_body("unauthorized", m))
     })?;
 
-    let caller_installation_id = uuid::Uuid::parse_str(&bearer_outcome.device_id)
+    let caller_device_id = uuid::Uuid::parse_str(&bearer_outcome.device_id)
         .map(DeviceId)
         .map_err(|_| {
             (
@@ -87,7 +87,7 @@ async fn post_link(
                 err_body("unauthorized", "invalid bearer device id"),
             )
         })?;
-    ensure_account_client(&state, caller_installation_id, &bearer_outcome.account_id).await?;
+    ensure_account_client(&state, caller_device_id, &bearer_outcome.account_id).await?;
 
     let display_name = req
         .host_display_name
@@ -96,11 +96,11 @@ async fn post_link(
         .filter(|name| !name.is_empty())
         .unwrap_or("host");
 
-    let installation_id = host_bootstrap::verify_and_register(
+    let device_id = host_bootstrap::verify_and_register(
         &state.store,
         state.bootstrap_nonces.as_ref(),
         HostBootstrapProof {
-            installation_id: &req.installation_id,
+            device_id: &req.device_id,
             nonce: &req.nonce,
             public_key: req.public_key.as_deref(),
             signature: &req.signature,
@@ -115,9 +115,9 @@ async fn post_link(
     let outcome = state
         .host_link
         .link_host(
-            installation_id,
+            device_id,
             &bearer_outcome.account_id,
-            caller_installation_id,
+            caller_device_id,
             Some(display_name),
         )
         .await
@@ -128,7 +128,7 @@ async fn post_link(
 
     Ok(Json(ResponseEnvelope::new(
         LinkHostData {
-            host_installation_id: outcome.host_installation_id.to_string(),
+            host_device_id: outcome.host_device_id.to_string(),
             host_installation_token: outcome.host_installation_token,
             link: LinkSummary {
                 pair_id: outcome.link.pair_id,
@@ -154,12 +154,12 @@ async fn post_unlink(
         (s, err_body("unauthorized", m))
     })?;
 
-    let host_installation_id = uuid::Uuid::parse_str(&req.host_installation_id)
+    let host_device_id = uuid::Uuid::parse_str(&req.host_device_id)
         .map(DeviceId)
         .map_err(|_| {
             (
                 StatusCode::BAD_REQUEST,
-                err_body("bad_request", "invalid host_installation_id"),
+                err_body("bad_request", "invalid host_device_id"),
             )
         })?;
 
@@ -167,7 +167,7 @@ async fn post_unlink(
         .host_link
         .unlink_host(
             state.registry.as_ref(),
-            host_installation_id,
+            host_device_id,
             &bearer_outcome.account_id,
         )
         .await
@@ -206,13 +206,13 @@ async fn get_hosts(
 
     let mut hosts = Vec::with_capacity(pairs.len());
     for pair in pairs {
-        let row = crate::store::device_installations::get_device(&state.store, pair.host_device_id)
+        let row = crate::store::devices::get_device(&state.store, pair.host_device_id)
             .await
             .map_err(|e| {
                 tracing::warn!(
                     target: "minos_backend::v1::hosts",
                     error = %e,
-                    host_installation_id = %pair.host_device_id,
+                    host_device_id = %pair.host_device_id,
                     "get_device(host) failed",
                 );
                 (
@@ -227,11 +227,11 @@ async fn get_hosts(
             .or_else(|| row.map(|r| r.display_name))
             .unwrap_or_else(|| "unknown".to_string());
         hosts.push(HostSummary {
-            host_installation_id: pair.host_device_id.to_string(),
+            host_device_id: pair.host_device_id.to_string(),
             host_display_name,
             linked_at_ms: pair.paired_at_ms,
             // **device online**: host installation has live `/ws/host`.
-            online: state.registry.get(pair.host_device_id).is_some(),
+            online: state.registry.get_host(pair.host_device_id).is_some(),
             last_seen_at_ms,
         });
     }
@@ -244,16 +244,16 @@ async fn get_hosts(
 
 async fn ensure_account_client(
     state: &BackendState,
-    installation_id: DeviceId,
+    device_id: DeviceId,
     account_id: &str,
 ) -> Result<(), (StatusCode, Json<ErrorEnvelope>)> {
-    let row = crate::store::device_installations::get_device(&state.store, installation_id)
+    let row = crate::store::devices::get_device(&state.store, device_id)
         .await
         .map_err(|e| {
             tracing::warn!(
                 target: "minos_backend::v1::hosts",
                 error = %e,
-                installation_id = %installation_id,
+                device_id = %device_id,
                 "get_device(account caller) failed",
             );
             (

@@ -258,7 +258,7 @@ async fn runtime_port_inject(
             conversation_id: conversation_id.to_string(),
             project_id,
             agent_id: agent.agent_id.clone(),
-            host_installation_id: Some(host_device_id.to_string()),
+            host_device_id: Some(host_device_id.to_string()),
             workspace_path: agent.workspace_path.clone(),
             initial_user_message: Some(text.to_string()),
             origin_message_id: Some(origin_message_id.to_string()),
@@ -390,7 +390,7 @@ async fn select_live_host_for_account(
 ) -> Result<minos_domain::DeviceId, crate::error::BackendError> {
     let hosts = crate::store::host_links::list_hosts_for_account(&state.store, account_id).await?;
     for host in hosts {
-        if state.registry.get(host.host_device_id).is_some() {
+        if state.registry.get_host(host.host_device_id).is_some() {
             return Ok(host.host_device_id);
         }
     }
@@ -2298,7 +2298,7 @@ async fn deliver_bot_inbox(
                 tracing::warn!(
                     target: "minos_backend::social",
                     delivery_id = %row.dispatch_id,
-                    host_installation_id = %host_device_id,
+                    host_device_id = %host_device_id,
                     error = %error,
                     "failed to push BotInboxDelivery to host connection"
                 );

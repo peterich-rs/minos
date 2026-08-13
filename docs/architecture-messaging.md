@@ -156,9 +156,9 @@ Desktop：主舞台是 **Timeline + Composer**；Session / Approval 是侧栏或
 | 角色 | 连接入口 | Principal | 默认 Topic |
 |------|---------|-----------|------------|
 | 人类客户端（Mobile / Web / Desktop Account） | `/ws/client` | `Account { account_id }` | `account:{account_id}` |
-| Host 守护进程 | `/ws/host` | `Host { host_installation_id }` | `host:{host_installation_id}` |
+| Host 守护进程 | `/ws/host` | `Host { host_device_id }` | `host:{host_device_id}` |
 
-同一 `(principal, installation_id)` **只保留最新连接**；旧连接 `4401` 强制关闭（成熟 IM 的「单设备踢旧」/ 多 tab 最新胜出策略）。
+同一 `(rail, DeviceId)` **只保留最新连接**（Account IM 与 Host runtime 可共享一个 DeviceId，互不踢）；旧连接 `4401` 强制关闭（成熟 IM 的「单设备踢旧」/ 多 tab 最新胜出策略）。
 
 ### 3.2 IM 稳态：长连接 · 心跳 · Presence · 吊销
 
@@ -179,19 +179,24 @@ Gateway ──推送──► 订阅方（online / offline / last_seen）
 | **心跳** | `Hello.heartbeat_interval_ms`（25s 建议）；服务端每 15s WS `Ping` 探测；**90s 无入站活动** → close `1011 heartbeat_timeout` |
 | **活动定义** | 入站 text / WS Ping·Pong / 应用层 `ClientFrame::Ping` 均刷新 liveness；`last_seen_at_ms` 节流写库（≥30s） |
 | **Online（分层语义）** | **Account sync（人类 IM）** = 该 account 至少一条 account-client `/ws/client` live（实现上 Mobile 计数见 `mobile_client_session_count`；Desktop/Web 同轨）；**Host online（设备）** = installation 有 live `/ws/host`；**Agent available** = bot 在 roster 且 bound Host online。**产品主 Online（能发能收）必须以 Account sync 为准**，不得仅用 Host 冒充 |
-| **last_seen** | 耐久：`device_installations.last_seen_at_ms`；HTTP 列表返回；连接 open/close 强制 touch（冷路径展示，不冒充 online） |
+| **last_seen** | 耐久：`devices.last_seen_at_ms`；HTTP 列表返回；连接 open/close 强制 touch（冷路径展示，不冒充 online） |
 | **Presence 推送** |  ephemeral `StreamEvent{kind:presence}`：Host 上下线 → 各 linked `account:{id}`（Mobile 改设备 online）；Account client 上下线 → 各 linked `host:{id}`（Host peer list） |
 | **吊销踢连接** | 同 installation 重连 `session_superseded`（4401）；auth/unlink `auth_revoked`（4401）；Host 可先收 `HostForceClose` 再 close |
 | **离线 Push** | presence + 偏好 + event_id 幂等 决策（见 Plane P / Backend B1）；**非**「与 presence 脱钩」 |
 
 ```
-Account client (browser / mobile / desktop UI)
+Account client (browser / mobile)
   │  Bearer access JWT
   ▼
-POST /v1/realtime/ws-ticket     # 保留：浏览器 WS 难设 Authorization
+POST /v1/realtime/ws-ticket     # 浏览器 / WebView JS WebSocket 难设 Authorization
   │  60s 一次性 ticket
   ▼
 GET /ws/client?ticket=…
+
+Desktop Account IM (Rust host)
+  │  Authorization: Bearer <access JWT>   # 无 ticket
+  ▼
+GET /ws/client
   │  校验 + 消费 ticket + 角色匹配
   ▼
 ServerFrame::Hello { conn_id, server_time_ms, heartbeat_interval_ms }
@@ -219,8 +224,8 @@ ServerFrame::Hello { … }
   │  Host ingest / 既有 host 控制帧
   └─ 退出 / revoke → HostForceClose + presence offline
 
-# 过渡期仍可能：POST /v1/host/realtime/ws-ticket → /ws/host?ticket=
-# 正式删除后不得再依赖 host ticket；WS 401 不得一律清本地 hit_
+# Host 无 ticket。Desktop 登录同事务签发 host_token（绑 DeviceId + account_id）。
+# WS 401 不得一律清本地 host_token。
 ```
 
 客户端断线后指数退避重连（典型 1s→30s 封顶）；冷路径 HTTP 列表用 `online` + `last_seen_at_ms` 纠偏。  
@@ -239,7 +244,7 @@ ServerFrame::Hello { … }
 | `conversation` | `conversation:{id}` | 对话消息 append / recall / reaction aggregate；时间线热路径 |
 | `project` | `project:{id}` | 项目与对话关联、归档 |
 | `agent_session` | `agent_session:{id}` | 会话生命周期、turn、**Approval Attention**、**UI 流式投影** |
-| `host` | `host:{installation_id}` | Host 命令下发、强制关闭、链接状态 |
+| `host` | `host:{device_id}` | Host 命令下发、强制关闭、链接状态 |
 
 权限：订阅时服务端校验 membership / ownership；拒绝则 `SubscriptionDenied`。
 
@@ -463,7 +468,7 @@ Minos 明确区分 **可靠性语义不同** 的消息平面——这是成熟�
 Client HTTP (start/stop/send-input/approval/…)
   → 事务写 host_commands + DurableEvent::HostCommandIssued
   → Outbox lane=host_command（与 social_durable 分车道 claim）
-  → HostCommandOutboxJob publish → topic host:{installation_id}
+  → HostCommandOutboxJob publish → topic host:{device_id}
   → Daemon 执行
   → ClientFrame::HostCommandAck / HostCommandResult
   → ack_pending_host_command_events（成功观察后 outbox acked）
@@ -602,7 +607,7 @@ POST send-message ──┤  durable_event_log @ conversation:{id}       │  �
 | @mention 索引 | **写时索引** | `message_mentions`（按消息×被@人），非全文检索 |
 | Approval | **读扩散为主** | Durable `agent_session:*`；Push 写扩散到设备 token；演进可补 account Attention |
 | Agent Stream UI | **读扩散 / 订阅** | `StreamEvent` → 当前订阅 `agent_session:*` 的连接 |
-| Host 命令 | **定向写** | `host:{installation_id}` 单目标（不是群 fanout） |
+| Host 命令 | **定向写** | `host:{device_id}` 单目标（不是群 fanout） |
 
 **为什么当前混合合理**：Project 协作群通常 **N 很小**（几人 + 数个 Agent），对 N 做 account 摘要写扩散成本可接受，且保证「没打开对话的端」仍能刷新会话列表——这是 IM 列表体验的刚需。
 
@@ -637,7 +642,7 @@ POST send-message ──┤  durable_event_log @ conversation:{id}       │  �
 | ID | 作用 |
 |----|------|
 | `account_id` | 人类账户 |
-| `installation_id` / `device_id` | 安装维度连接与踢旧 |
+| `device_id` | 设备维度连接与踢旧（Account / Host 分轨） |
 | `conversation_id` | 社交会话 |
 | `message_id` | 单条聊天消息 |
 | `chat_message_mentions.(target_kind,target_id)` | 多态 @ 目标：`account`/`agent` + `ordinal` 外观序 |

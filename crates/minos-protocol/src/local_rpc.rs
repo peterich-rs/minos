@@ -120,7 +120,7 @@ pub trait LocalDaemonRpc {
     async fn host_prepare_link(&self)
         -> jsonrpsee::core::RpcResult<crate::HostPrepareLinkResponse>;
 
-    /// Sign `"{installation_id}:{nonce}:v1/hosts/link"` with the host key.
+    /// Sign `"{device_id}:{nonce}:v1/hosts/link"` with the host key.
     #[method(name = "host_sign_link_proof")]
     async fn host_sign_link_proof(
         &self,

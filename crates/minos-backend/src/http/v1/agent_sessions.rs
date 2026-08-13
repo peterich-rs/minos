@@ -32,7 +32,7 @@ struct StartAgentSessionRequest {
     conversation_id: String,
     project_id: Option<String>,
     agent_id: String,
-    host_installation_id: Option<String>,
+    host_device_id: Option<String>,
     workspace_path: Option<String>,
     initial_user_message: Option<String>,
     /// Optional Hub user message id (collab agent-result suffix). Pass-through when present.
@@ -45,7 +45,7 @@ struct StartAgentSessionRequest {
 struct StartAgentSessionResponse {
     session_id: String,
     conversation_id: String,
-    host_installation_id: String,
+    host_device_id: String,
     started_at_ms: i64,
     initial_turn_id: Option<String>,
     host_command_id: String,
@@ -171,7 +171,7 @@ async fn start_session(
             conversation_id: request.conversation_id,
             project_id: request.project_id,
             agent_id: request.agent_id,
-            host_installation_id: request.host_installation_id,
+            host_device_id: request.host_device_id,
             workspace_path: request.workspace_path,
             initial_user_message: request.initial_user_message,
             origin_message_id: request
@@ -189,7 +189,7 @@ async fn start_session(
     Ok(Json(StartAgentSessionResponse {
         session_id: output.session_id,
         conversation_id: output.conversation_id,
-        host_installation_id: output.host_installation_id,
+        host_device_id: output.host_device_id,
         started_at_ms: output.started_at_ms,
         initial_turn_id: output.initial_turn_id,
         host_command_id: output.host_command_id,

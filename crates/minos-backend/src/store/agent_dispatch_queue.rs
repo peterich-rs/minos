@@ -1055,7 +1055,7 @@ where
 pub async fn set_lease<S>(
     store: &S,
     delivery_id: &str,
-    host_installation_id: &str,
+    host_device_id: &str,
     lease_expires_at_ms: i64,
     now_ms: i64,
 ) -> Result<(), BackendError>
@@ -1071,7 +1071,7 @@ where
                      updated_at_ms = ?3
                  WHERE dispatch_id = ?4",
             )
-            .bind(host_installation_id)
+            .bind(host_device_id)
             .bind(lease_expires_at_ms)
             .bind(now_ms)
             .bind(delivery_id)
@@ -1088,7 +1088,7 @@ where
                      updated_at_ms = $3
                  WHERE dispatch_id = $4",
             )
-            .bind(host_installation_id)
+            .bind(host_device_id)
             .bind(lease_expires_at_ms)
             .bind(now_ms)
             .bind(delivery_id)
@@ -1104,7 +1104,7 @@ where
 pub async fn renew_lease<S>(
     store: &S,
     delivery_id: &str,
-    host_installation_id: &str,
+    host_device_id: &str,
     lease_expires_at_ms: i64,
     now_ms: i64,
 ) -> Result<bool, BackendError>
@@ -1125,7 +1125,7 @@ where
             .bind(now_ms)
             .bind(delivery_id)
             .bind(STATUS_INFLIGHT)
-            .bind(host_installation_id)
+            .bind(host_device_id)
             .execute(pool)
             .await
             .map_err(store_err("agent_dispatch_queue::renew_lease"))?;
@@ -1144,7 +1144,7 @@ where
             .bind(now_ms)
             .bind(delivery_id)
             .bind(STATUS_INFLIGHT)
-            .bind(host_installation_id)
+            .bind(host_device_id)
             .execute(pool)
             .await
             .map_err(store_err("agent_dispatch_queue::renew_lease"))?;
@@ -1153,10 +1153,10 @@ where
     }
 }
 
-/// Renew every inflight lease owned by `host_installation_id` (host keepalive / Ping).
+/// Renew every inflight lease owned by `host_device_id` (host keepalive / Ping).
 pub async fn renew_leases_for_host<S>(
     store: &S,
-    host_installation_id: &str,
+    host_device_id: &str,
     lease_expires_at_ms: i64,
     now_ms: i64,
 ) -> Result<u64, BackendError>
@@ -1175,7 +1175,7 @@ where
             .bind(lease_expires_at_ms)
             .bind(now_ms)
             .bind(STATUS_INFLIGHT)
-            .bind(host_installation_id)
+            .bind(host_device_id)
             .execute(pool)
             .await
             .map_err(store_err("agent_dispatch_queue::renew_leases_for_host"))?;
@@ -1192,7 +1192,7 @@ where
             .bind(lease_expires_at_ms)
             .bind(now_ms)
             .bind(STATUS_INFLIGHT)
-            .bind(host_installation_id)
+            .bind(host_device_id)
             .execute(pool)
             .await
             .map_err(store_err("agent_dispatch_queue::renew_leases_for_host"))?;

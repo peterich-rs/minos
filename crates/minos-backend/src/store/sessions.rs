@@ -172,13 +172,13 @@ pub async fn exists_for_account(
                   WHERE t.session_id = ?
                     AND (
                         EXISTS (
-                            SELECT 1 FROM device_installations d
-                             WHERE d.installation_id = t.owner_device_id
+                            SELECT 1 FROM devices d
+                             WHERE d.device_id = t.owner_device_id
                                AND d.account_id = ?
                         )
                         OR EXISTS (
                             SELECT 1 FROM host_links hl
-                             WHERE hl.host_installation_id = t.owner_device_id
+                             WHERE hl.host_device_id = t.owner_device_id
                                AND hl.account_id = ?
                         )
                     )",
@@ -197,13 +197,13 @@ pub async fn exists_for_account(
                      WHERE t.session_id = $1
                        AND (
                            EXISTS (
-                               SELECT 1 FROM device_installations d
-                                WHERE d.installation_id = t.owner_device_id
+                               SELECT 1 FROM devices d
+                                WHERE d.device_id = t.owner_device_id
                                   AND d.account_id = $2
                            )
                            OR EXISTS (
                                SELECT 1 FROM host_links hl
-                                WHERE hl.host_installation_id = t.owner_device_id
+                                WHERE hl.host_device_id = t.owner_device_id
                                   AND hl.account_id = $2
                            )
                        )
@@ -254,13 +254,13 @@ pub async fn list(
                      AND (
                          ?5 IS NULL
                          OR EXISTS (
-                             SELECT 1 FROM device_installations d
-                             WHERE d.installation_id = sessions.owner_device_id
+                             SELECT 1 FROM devices d
+                             WHERE d.device_id = sessions.owner_device_id
                                AND d.account_id = ?5
                          )
                          OR EXISTS (
                              SELECT 1 FROM host_links hl
-                             WHERE hl.host_installation_id = sessions.owner_device_id
+                             WHERE hl.host_device_id = sessions.owner_device_id
                                AND hl.account_id = ?5
                          )
                      )
@@ -285,13 +285,13 @@ pub async fn list(
                      AND (
                          $5::TEXT IS NULL
                          OR EXISTS (
-                             SELECT 1 FROM device_installations d
-                             WHERE d.installation_id = sessions.owner_device_id
+                             SELECT 1 FROM devices d
+                             WHERE d.device_id = sessions.owner_device_id
                                AND d.account_id = $5
                          )
                          OR EXISTS (
                              SELECT 1 FROM host_links hl
-                             WHERE hl.host_installation_id = sessions.owner_device_id
+                             WHERE hl.host_device_id = sessions.owner_device_id
                                AND hl.account_id = $5
                          )
                      )
@@ -340,15 +340,15 @@ pub async fn summaries_for_ids(
             query.push(
                 ") AND (\
                     EXISTS (\
-                        SELECT 1 FROM device_installations d \
-                        WHERE d.installation_id = sessions.owner_device_id \
+                        SELECT 1 FROM devices d \
+                        WHERE d.device_id = sessions.owner_device_id \
                           AND d.account_id = ",
             );
             query.push_bind(account_id);
             query.push(
                 ") OR EXISTS (\
                         SELECT 1 FROM host_links hl \
-                        WHERE hl.host_installation_id = sessions.owner_device_id \
+                        WHERE hl.host_device_id = sessions.owner_device_id \
                           AND hl.account_id = ",
             );
             query.push_bind(account_id);
@@ -370,15 +370,15 @@ pub async fn summaries_for_ids(
             query.push(
                 ") AND (\
                     EXISTS (\
-                        SELECT 1 FROM device_installations d \
-                        WHERE d.installation_id = sessions.owner_device_id \
+                        SELECT 1 FROM devices d \
+                        WHERE d.device_id = sessions.owner_device_id \
                           AND d.account_id = ",
             );
             query.push_bind(account_id);
             query.push(
                 ") OR EXISTS (\
                         SELECT 1 FROM host_links hl \
-                        WHERE hl.host_installation_id = sessions.owner_device_id \
+                        WHERE hl.host_device_id = sessions.owner_device_id \
                           AND hl.account_id = ",
             );
             query.push_bind(account_id);
@@ -492,7 +492,7 @@ mod tests {
 
     async fn seed_agent_host(pool: &SqlitePool) {
         sqlx::query(
-            r"INSERT INTO device_installations (installation_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id)
+            r"INSERT INTO devices (device_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id)
                VALUES ('dev1','host','Dev','test-host-public-key-v1',0,0,NULL)",
         )
         .execute(pool)
@@ -617,7 +617,7 @@ mod tests {
         let pool = memory_pool().await;
         seed_agent_host(&pool).await;
         sqlx::query(
-            r"INSERT INTO device_installations (installation_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id) VALUES ('dev2','host','Other','test-host-public-key-v1',0,0,NULL)",
+            r"INSERT INTO devices (device_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id) VALUES ('dev2','host','Other','test-host-public-key-v1',0,0,NULL)",
         )
         .execute(&pool)
         .await
@@ -650,8 +650,8 @@ mod tests {
             .await
             .unwrap();
         sqlx::query(
-            r"INSERT INTO device_installations
-                (installation_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id)
+            r"INSERT INTO devices
+                (device_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id)
                VALUES ('a-phone','mobile','Phone-A',NULL,0,0,?1)",
         )
         .bind(&acct_a.account_id)
@@ -659,8 +659,8 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(
-            r"INSERT INTO device_installations
-                (installation_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id)
+            r"INSERT INTO devices
+                (device_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id)
                VALUES ('b-phone','mobile','Phone-B',NULL,0,0,?1)",
         )
         .bind(&acct_b.account_id)
@@ -672,8 +672,8 @@ mod tests {
             .await
             .unwrap();
         sqlx::query(
-            r"INSERT INTO device_installations
-                (installation_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id)
+            r"INSERT INTO devices
+                (device_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id)
                VALUES ('orphan','mobile','Phone-O',NULL,0,0,?1)",
         )
         .bind(&orphan_acct.account_id)

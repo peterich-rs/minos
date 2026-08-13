@@ -1050,19 +1050,19 @@ pub async fn insert_bot_revision(
 pub async fn upsert_bot_deployment(
     store: &impl AsStorePool,
     agent_id: &str,
-    host_installation_id: &str,
+    host_device_id: &str,
     now_ms: i64,
 ) -> Result<(), BackendError> {
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
             sqlx::query(
-                "INSERT INTO bot_deployments (agent_id, host_installation_id, status, updated_at_ms)
+                "INSERT INTO bot_deployments (agent_id, host_device_id, status, updated_at_ms)
                  VALUES (?, ?, 'active', ?)
-                 ON CONFLICT(agent_id, host_installation_id) DO UPDATE SET
+                 ON CONFLICT(agent_id, host_device_id) DO UPDATE SET
                    status = 'active', updated_at_ms = excluded.updated_at_ms",
             )
             .bind(agent_id)
-            .bind(host_installation_id)
+            .bind(host_device_id)
             .bind(now_ms)
             .execute(pool)
             .await
@@ -1070,13 +1070,13 @@ pub async fn upsert_bot_deployment(
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query(
-                "INSERT INTO bot_deployments (agent_id, host_installation_id, status, updated_at_ms)
+                "INSERT INTO bot_deployments (agent_id, host_device_id, status, updated_at_ms)
                  VALUES ($1, $2, 'active', $3)
-                 ON CONFLICT(agent_id, host_installation_id) DO UPDATE SET
+                 ON CONFLICT(agent_id, host_device_id) DO UPDATE SET
                    status = 'active', updated_at_ms = EXCLUDED.updated_at_ms",
             )
             .bind(agent_id)
-            .bind(host_installation_id)
+            .bind(host_device_id)
             .bind(now_ms)
             .execute(pool)
             .await

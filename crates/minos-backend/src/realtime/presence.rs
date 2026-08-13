@@ -1,7 +1,7 @@
 //! Installation presence fanout for the formal IM gateway.
 //!
 //! Online is live-connection truth (`RealtimeConnectionRegistry` / active WS).
-//! `last_seen_at_ms` is durable on `device_installations` and returned on
+//! `last_seen_at_ms` is durable on `devices` and returned on
 //! HTTP list endpoints. Presence pushes are **ephemeral** `StreamEvent`s
 //! (`kind = presence`) — not DurableEvent log entries.
 
@@ -25,7 +25,7 @@ pub async fn publish_connection_presence(
 ) {
     let at_ms = chrono::Utc::now().timestamp_millis();
     if let Err(error) =
-        crate::store::device_installations::touch_last_seen(&state.store, &device_id, at_ms).await
+        crate::store::devices::touch_last_seen(&state.store, &device_id, at_ms).await
     {
         tracing::debug!(
             target: "minos_backend::realtime::presence",
@@ -37,7 +37,7 @@ pub async fn publish_connection_presence(
     }
 
     let payload = PresencePayload {
-        installation_id: device_id.to_string(),
+        device_id: device_id.to_string(),
         principal_kind: presence_principal_kind(role),
         online,
         last_seen_at_ms: at_ms,
@@ -125,7 +125,7 @@ mod tests {
     #[test]
     fn presence_payload_round_trips() {
         let payload = PresencePayload {
-            installation_id: "11111111-1111-1111-1111-111111111111".into(),
+            device_id: "11111111-1111-1111-1111-111111111111".into(),
             principal_kind: PresencePrincipalKind::Host,
             online: true,
             last_seen_at_ms: 100,

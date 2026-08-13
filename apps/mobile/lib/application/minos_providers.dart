@@ -38,7 +38,7 @@ final hostPresenceSyncProvider = Provider<void>((ref) {
         final kind = map['principal_kind']?.toString();
         // Only host device rows live in pairedMacs; account_client is for hosts.
         if (kind != null && kind != 'host') return;
-        final id = map['installation_id']?.toString().trim() ?? '';
+        final id = map['device_id']?.toString().trim() ?? '';
         if (id.isEmpty) return;
         final online = map['online'] == true;
         final lastSeen = map['last_seen_at_ms'];
@@ -61,7 +61,7 @@ final hostPresenceSyncProvider = Provider<void>((ref) {
       if (ui.kind == 'host_linked') {
         final map = jsonDecode(ui.payloadJson);
         if (map is! Map) return;
-        final id = map['host_installation_id']?.toString().trim() ?? '';
+        final id = map['host_device_id']?.toString().trim() ?? '';
         if (id.isEmpty) return;
         final display =
             map['host_display_name']?.toString().trim().isNotEmpty == true
@@ -87,7 +87,7 @@ final hostPresenceSyncProvider = Provider<void>((ref) {
       if (ui.kind == 'host_unlinked') {
         final map = jsonDecode(ui.payloadJson);
         if (map is! Map) return;
-        final id = map['host_installation_id']?.toString().trim() ?? '';
+        final id = map['host_device_id']?.toString().trim() ?? '';
         if (id.isEmpty) return;
         unawaited(
           ref

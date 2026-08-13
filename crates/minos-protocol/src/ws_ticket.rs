@@ -1,15 +1,16 @@
 //! WS ticket request/response types for the realtime gateway.
 //!
-//! Before upgrading to `/ws/client` or `/ws/host`, the caller must obtain
-//! a short-lived ticket via `POST /v1/realtime/ws-ticket` (account) or
-//! `POST /v1/host/realtime/ws-ticket` (host).
+//! Browser / JS WebSocket clients obtain a short-lived ticket via
+//! `POST /v1/realtime/ws-ticket` then connect `GET /ws/client?ticket=`.
+//! Desktop Rust and Host daemon send `Authorization: Bearer` and do not
+//! use a host ticket (`POST /v1/host/realtime/ws-ticket` is gone).
 
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RealtimeWsTicketRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub installation_id: Option<String>,
+    pub device_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -58,9 +59,7 @@ mod tests {
 
     #[test]
     fn realtime_ws_ticket_request_empty_round_trip() {
-        let req = RealtimeWsTicketRequest {
-            installation_id: None,
-        };
+        let req = RealtimeWsTicketRequest { device_id: None };
         let json = serde_json::to_string(&req).unwrap();
         let back: RealtimeWsTicketRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(req, back);

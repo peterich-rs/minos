@@ -40,7 +40,7 @@ pub struct HostSummary {
     pub paired_via_device_id: DeviceId,
     #[serde(default)]
     pub online: bool,
-    /// Best-effort last activity from hub (`device_installations.last_seen_at_ms`).
+    /// Best-effort last activity from hub (`devices.last_seen_at_ms`).
     #[serde(default)]
     pub last_seen_at_ms: i64,
 }
@@ -717,7 +717,7 @@ pub struct HealthResponse {
 /// Daemon local RPC: prepare same-account host link proof material.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HostPrepareLinkResponse {
-    pub installation_id: String,
+    pub device_id: String,
     pub public_key: String,
     pub nonce: String,
 }
@@ -725,7 +725,7 @@ pub struct HostPrepareLinkResponse {
 /// Daemon local RPC: sign the Host Link Ed25519 proof.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HostSignLinkProofParams {
-    pub installation_id: String,
+    pub device_id: String,
     pub nonce: String,
 }
 
@@ -754,7 +754,7 @@ pub struct HostClearCredentialResponse {
 /// Account-side request to target one paired host for a CLI scan.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ListHostClisRequest {
-    pub host_installation_id: String,
+    pub host_device_id: String,
 }
 
 pub type ListClisResponse = Vec<AgentDescriptor>;
@@ -771,7 +771,7 @@ pub struct ListHostSkillsRequest {
 /// Account-side request to inspect skills on one paired host.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ListHostSkillsCommandRequest {
-    pub host_installation_id: String,
+    pub host_device_id: String,
     pub workspace: String,
     #[serde(default)]
     pub force_reload: bool,
@@ -791,7 +791,7 @@ pub struct ListHostWorkspacesRequest {
 /// Account-side request to inspect workspace directories on one paired host.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ListHostWorkspacesCommandRequest {
-    pub host_installation_id: String,
+    pub host_device_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root: Option<String>,
     #[serde(default)]
@@ -854,7 +854,7 @@ pub struct WriteHostSkillConfigRequest {
 /// Account-side request to update one host skill toggle.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WriteHostSkillConfigCommandRequest {
-    pub host_installation_id: String,
+    pub host_device_id: String,
     pub workspace: String,
     pub path: String,
     pub enabled: bool,
@@ -1975,7 +1975,7 @@ mod tests {
     #[test]
     fn list_host_clis_request_round_trip() {
         let req = ListHostClisRequest {
-            host_installation_id: "host-123".into(),
+            host_device_id: "host-123".into(),
         };
         let json = serde_json::to_string(&req).unwrap();
         let back: ListHostClisRequest = serde_json::from_str(&json).unwrap();
@@ -1985,7 +1985,7 @@ mod tests {
     #[test]
     fn list_host_skills_command_request_round_trip() {
         let req = ListHostSkillsCommandRequest {
-            host_installation_id: "host-123".into(),
+            host_device_id: "host-123".into(),
             workspace: "/tmp/workspace".into(),
             force_reload: true,
         };
@@ -1997,7 +1997,7 @@ mod tests {
     #[test]
     fn write_host_skill_config_command_request_round_trip() {
         let req = WriteHostSkillConfigCommandRequest {
-            host_installation_id: "host-123".into(),
+            host_device_id: "host-123".into(),
             workspace: String::new(),
             path: "/tmp/skill".into(),
             enabled: false,

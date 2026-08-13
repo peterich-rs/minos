@@ -24,7 +24,7 @@ use crate::store::{
 /// window so flaky reconnects do not flood the user.
 ///
 /// Grace is based on registry-stamped disconnect time (real WS leave edge),
-/// **not** throttled `device_installations.last_seen` (which can lag 30s+).
+/// **not** throttled `devices.last_seen` (which can lag 30s+).
 pub const DISCONNECT_GRACE_MS: i64 = 15_000;
 
 // ── Presence port ──────────────────────────────────────────────────────
@@ -65,7 +65,7 @@ impl PresencePort for OfflinePresence {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegisterTokenInput {
     pub account_id: String,
-    pub installation_id: String,
+    pub device_id: String,
     pub kind: PushKind,
     pub token: String,
     pub locale: Option<String>,
@@ -92,7 +92,7 @@ pub struct UpdatePreferencesInput {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PushTokenDto {
     pub token_hash: String,
-    pub installation_id: String,
+    pub device_id: String,
     pub kind: PushKind,
     pub locale: Option<String>,
     pub created_at_ms: i64,
@@ -255,7 +255,7 @@ impl NotificationService for DefaultNotificationService {
         push_tokens::upsert(
             &self.store,
             &input.account_id,
-            &input.installation_id,
+            &input.device_id,
             input.kind.as_str(),
             &input.token,
             input.locale.as_deref(),
@@ -281,7 +281,7 @@ impl NotificationService for DefaultNotificationService {
             .into_iter()
             .map(|r| PushTokenDto {
                 token_hash: r.token_hash,
-                installation_id: r.installation_id,
+                device_id: r.device_id,
                 kind: match r.kind.as_str() {
                     "apns" => PushKind::Apns,
                     _ => PushKind::Fcm,
@@ -661,16 +661,16 @@ mod tests {
     async fn seed_account_with_token(
         store: &StoreHandle,
         email: &str,
-    ) -> (String, String /* installation_id */) {
+    ) -> (String, String /* device_id */) {
         let account_id = insert_account(store.sqlite_pool().unwrap(), email).await;
-        let installation_id = DeviceId::new().to_string();
+        let device_id = DeviceId::new().to_string();
         // Minimal installation so FK on push_tokens / device tables hold if needed.
         sqlx::query(
-            "INSERT INTO device_installations
-                (installation_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id)
+            "INSERT INTO devices
+                (device_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id)
              VALUES (?, 'mobile', 'phone', NULL, ?, ?, ?)",
         )
-        .bind(&installation_id)
+        .bind(&device_id)
         .bind(T0)
         .bind(T0 - 60_000) // outside grace
         .bind(&account_id)
@@ -681,7 +681,7 @@ mod tests {
         push_tokens::upsert(
             store,
             &account_id,
-            &installation_id,
+            &device_id,
             "fcm",
             "test-fcm-token-value-xxxxxxxxxxxxxxxx",
             None,
@@ -690,7 +690,7 @@ mod tests {
         .await
         .unwrap();
 
-        (account_id, installation_id)
+        (account_id, device_id)
     }
 
     fn account_message_envelope(account_id: &str, event_id: &str) -> DurableEventEnvelope {

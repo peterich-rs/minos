@@ -8,7 +8,7 @@ import 'package:minos/domain/linked_host.dart';
 ///   "data": {
 ///     "hosts": [
 ///       {
-///         "host_installation_id": "...",
+///         "host_device_id": "...",
 ///         "host_display_name": "My Mac",
 ///         "linked_at_ms": 123,
 ///         "online": true
@@ -42,9 +42,9 @@ LinkedHost mapHostSummaryJson(Object? json) {
     throw FormatException('host row expected object, got ${json.runtimeType}');
   }
   final map = Map<String, dynamic>.from(json);
-  final id = map['host_installation_id']?.toString().trim() ?? '';
+  final id = map['host_device_id']?.toString().trim() ?? '';
   if (id.isEmpty) {
-    throw const FormatException('host row missing host_installation_id');
+    throw const FormatException('host row missing host_device_id');
   }
   final name = map['host_display_name']?.toString() ?? '';
   final linkedRaw = map['linked_at_ms'] ?? map['paired_at_ms'];

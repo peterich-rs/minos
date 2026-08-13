@@ -353,7 +353,7 @@ impl AgentSessionService for DefaultAgentSessionService {
             return Ok(StartAgentSessionOutput {
                 session_id: existing.session_id,
                 conversation_id: existing.conversation_id,
-                host_installation_id: existing
+                host_device_id: existing
                     .host_device_id
                     .ok_or(AgentSessionError::HostUnavailable)?,
                 started_at_ms: existing.started_at_ms,
@@ -362,7 +362,7 @@ impl AgentSessionService for DefaultAgentSessionService {
             });
         }
 
-        let host_device_id = match input.host_installation_id.as_deref() {
+        let host_device_id = match input.host_device_id.as_deref() {
             Some(host_id) => {
                 let host_device_id = Self::parse_host_device_id(host_id)?;
                 if !self
@@ -427,7 +427,7 @@ impl AgentSessionService for DefaultAgentSessionService {
             session_id: session_id.clone(),
             conversation_id: input.conversation_id.clone(),
             project_id: input.project_id.clone(),
-            host_installation_id: host_device_id.to_string(),
+            host_device_id: host_device_id.to_string(),
             agent_id: resolved_agent_id.clone(),
             at_ms: started_at_ms,
         };
@@ -453,7 +453,7 @@ impl AgentSessionService for DefaultAgentSessionService {
                 &mut tx,
                 NewHostCommand {
                     command_id: host_command_id.clone(),
-                    host_installation_id: host_device_id,
+                    host_device_id,
                     agent_session_id: Some(session_id.clone()),
                     method: START_COMMAND_METHOD.into(),
                     params_json: serde_json::json!({
@@ -487,7 +487,7 @@ impl AgentSessionService for DefaultAgentSessionService {
         Ok(StartAgentSessionOutput {
             session_id,
             conversation_id: input.conversation_id,
-            host_installation_id: host_device_id.to_string(),
+            host_device_id: host_device_id.to_string(),
             started_at_ms,
             initial_turn_id,
             host_command_id,
@@ -590,7 +590,7 @@ impl AgentSessionService for DefaultAgentSessionService {
                 &mut tx,
                 NewHostCommand {
                     command_id: host_command_id,
-                    host_installation_id: host_device_id,
+                    host_device_id,
                     agent_session_id: Some(session.session_id.clone()),
                     method: SEND_INPUT_COMMAND_METHOD.into(),
                     params_json: serde_json::json!({
@@ -698,7 +698,7 @@ impl AgentSessionService for DefaultAgentSessionService {
                 &mut tx,
                 NewHostCommand {
                     command_id: format!("cmd-agent-session-stop-{}", session.session_id),
-                    host_installation_id: host_device_id,
+                    host_device_id,
                     agent_session_id: Some(session.session_id.clone()),
                     method: STOP_COMMAND_METHOD.into(),
                     params_json: serde_json::json!({
@@ -908,7 +908,7 @@ async fn insert_agent_session_in_tx(
         DbTx::Sqlite(tx) => {
             sqlx::query(
                 "INSERT INTO agent_sessions
-                    (session_id, conversation_id, project_id, host_installation_id, agent_id, status, started_at_ms, ended_at_ms, idempotency_account_id, idempotency_key)
+                    (session_id, conversation_id, project_id, host_device_id, agent_id, status, started_at_ms, ended_at_ms, idempotency_account_id, idempotency_key)
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(session_id)
@@ -928,7 +928,7 @@ async fn insert_agent_session_in_tx(
         DbTx::Postgres(tx) => {
             sqlx::query(
                 "INSERT INTO agent_sessions
-                    (session_id, conversation_id, project_id, host_installation_id, agent_id, status, started_at_ms, ended_at_ms, idempotency_account_id, idempotency_key)
+                    (session_id, conversation_id, project_id, host_device_id, agent_id, status, started_at_ms, ended_at_ms, idempotency_account_id, idempotency_key)
                  VALUES ($1, $2, $3, $4, $5, $6::agent_session_status, $7, $8, $9, $10)",
             )
             .bind(session_id)

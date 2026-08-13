@@ -8,11 +8,13 @@ use axum::http::{HeaderMap, StatusCode};
 use minos_domain::{DeviceId, DeviceRole};
 
 use crate::http::BackendState;
-use crate::store::{device_installations, host_installation_tokens};
+use crate::store::{devices, host_tokens};
 
+/// Authenticated Host rail: this Mac (`device_id`) bound to one account.
 #[derive(Debug, Clone)]
-pub struct HostInstallationPrincipal {
-    pub host_installation_id: DeviceId,
+pub struct HostPrincipal {
+    pub device_id: DeviceId,
+    pub account_id: String,
 }
 
 #[derive(Debug)]
@@ -41,10 +43,10 @@ impl HostInstallationAuthError {
 pub async fn require(
     state: &BackendState,
     headers: &HeaderMap,
-) -> Result<HostInstallationPrincipal, HostInstallationAuthError> {
+) -> Result<HostPrincipal, HostInstallationAuthError> {
     let token = bearer_token(headers)?;
     let token_hash = crate::host_link::sha256_hex(token);
-    let row = host_installation_tokens::verify_active_token(
+    let row = host_tokens::verify_active_token(
         &state.store,
         &token_hash,
         chrono::Utc::now().timestamp_millis(),
@@ -53,16 +55,33 @@ pub async fn require(
     .map_err(|error| HostInstallationAuthError::Internal(error.to_string()))?
     .ok_or(HostInstallationAuthError::Invalid)?;
 
-    let host = device_installations::get_device(&state.store, row.host_installation_id)
+    let host = devices::get_device(&state.store, row.host_device_id)
         .await
         .map_err(|error| HostInstallationAuthError::Internal(error.to_string()))?
         .ok_or(HostInstallationAuthError::Invalid)?;
-    if host.role != DeviceRole::AgentHost {
+    // Desktop login binds host_token to the same DeviceId as the account
+    // installation (kind=desktop). Standalone daemons remain AgentHost.
+    if host.role != DeviceRole::AgentHost && host.role != DeviceRole::DesktopConsole {
         return Err(HostInstallationAuthError::Invalid);
     }
 
-    Ok(HostInstallationPrincipal {
-        host_installation_id: host.device_id,
+    let account_id = match row.account_id.filter(|id| !id.is_empty()) {
+        Some(id) => id,
+        None => {
+            let links =
+                crate::store::host_links::list_accounts_for_host(&state.store, row.host_device_id)
+                    .await
+                    .map_err(|error| HostInstallationAuthError::Internal(error.to_string()))?;
+            match links.as_slice() {
+                [only] => only.mobile_account_id.clone(),
+                _ => return Err(HostInstallationAuthError::Invalid),
+            }
+        }
+    };
+
+    Ok(HostPrincipal {
+        device_id: host.device_id,
+        account_id,
     })
 }
 

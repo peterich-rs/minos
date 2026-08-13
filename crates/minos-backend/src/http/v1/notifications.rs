@@ -34,7 +34,7 @@ pub fn router() -> Router<BackendState> {
 
 #[derive(Debug, Deserialize)]
 struct RegisterTokenRequest {
-    installation_id: String,
+    device_id: String,
     kind: String,
     token: String,
     locale: Option<String>,
@@ -106,7 +106,7 @@ async fn register_token(
         .notifications
         .register_token(RegisterTokenInput {
             account_id,
-            installation_id: request.installation_id,
+            device_id: request.device_id,
             kind,
             token: request.token,
             locale: request.locale,

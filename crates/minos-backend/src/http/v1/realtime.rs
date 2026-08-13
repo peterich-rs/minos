@@ -20,7 +20,7 @@ use crate::http::BackendState;
 
 #[derive(Debug, Deserialize)]
 pub struct RealtimeWsTicketRequest {
-    pub installation_id: String,
+    pub device_id: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -42,25 +42,24 @@ async fn post_ws_ticket(
     let Ok(bearer_outcome) = bearer::require_account(&state, &headers) else {
         return (StatusCode::UNAUTHORIZED, err("unauthorized")).into_response();
     };
-    let installation_id = match Uuid::parse_str(&req.installation_id).map(DeviceId) {
+    let device_id = match Uuid::parse_str(&req.device_id).map(DeviceId) {
         Ok(id) => id,
         Err(_) => return (StatusCode::BAD_REQUEST, err("bad_request")).into_response(),
     };
 
-    let row =
-        match crate::store::device_installations::get_device(&state.store, installation_id).await {
-            Ok(Some(row)) => row,
-            Ok(None) => return (StatusCode::UNAUTHORIZED, err("unauthorized")).into_response(),
-            Err(error) => {
-                tracing::warn!(
-                    target: "minos_backend::v1::realtime",
-                    error = %error,
-                    installation_id = %req.installation_id,
-                    "get_device failed while issuing formal ws ticket",
-                );
-                return (StatusCode::INTERNAL_SERVER_ERROR, err("internal")).into_response();
-            }
-        };
+    let row = match crate::store::devices::get_device(&state.store, device_id).await {
+        Ok(Some(row)) => row,
+        Ok(None) => return (StatusCode::UNAUTHORIZED, err("unauthorized")).into_response(),
+        Err(error) => {
+            tracing::warn!(
+                target: "minos_backend::v1::realtime",
+                error = %error,
+                device_id = %req.device_id,
+                "get_device failed while issuing formal ws ticket",
+            );
+            return (StatusCode::INTERNAL_SERVER_ERROR, err("internal")).into_response();
+        }
+    };
 
     if row.account_id.as_deref() != Some(&bearer_outcome.account_id)
         || !row.role.is_account_client()
@@ -70,7 +69,7 @@ async fn post_ws_ticket(
 
     match state
         .auth
-        .issue_ws_ticket(&bearer_outcome.account_id, installation_id, row.role)
+        .issue_ws_ticket(&bearer_outcome.account_id, device_id, row.role)
         .await
     {
         Ok(session) => {
@@ -90,7 +89,7 @@ async fn post_ws_ticket(
             tracing::warn!(
                 target: "minos_backend::v1::realtime",
                 error = ?error,
-                installation_id = %req.installation_id,
+                device_id = %req.device_id,
                 account_id = %bearer_outcome.account_id,
                 "issue_ws_ticket failed",
             );

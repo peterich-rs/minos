@@ -1119,7 +1119,7 @@ mod tests {
             &serde_json::json!({
                 "kind": "host_command_issued",
                 "command_id": "cmd-1",
-                "host_installation_id": host_id.to_string(),
+                "host_device_id": host_id.to_string(),
                 "method": "minos_health",
                 "params": null,
                 "deadline_at_ms": T0 + 1_000,
@@ -1188,7 +1188,7 @@ mod tests {
             &serde_json::json!({
                 "kind": "host_command_issued",
                 "command_id": "cmd-expired",
-                "host_installation_id": host_id.to_string(),
+                "host_device_id": host_id.to_string(),
                 "method": "minos_health",
                 "params": null,
                 "deadline_at_ms": T0 + 10,
@@ -1252,7 +1252,7 @@ mod tests {
             &serde_json::json!({
                 "kind": "host_command_issued",
                 "command_id": "cmd-timeout-no-unlock",
-                "host_installation_id": host_id.to_string(),
+                "host_device_id": host_id.to_string(),
                 "method": "minos_health",
                 "params": null,
                 "deadline_at_ms": T0 + 10,
@@ -1336,7 +1336,7 @@ mod tests {
             &serde_json::json!({
                 "kind": "host_command_issued",
                 "command_id": "cmd-obs-past-deadline",
-                "host_installation_id": host_id.to_string(),
+                "host_device_id": host_id.to_string(),
                 "method": "minos_health",
                 "params": null,
                 "deadline_at_ms": T0 + 10,
@@ -1705,7 +1705,7 @@ mod tests {
             &serde_json::json!({
                 "kind": "host_command_issued",
                 "command_id": "cmd-pending",
-                "host_installation_id": host_id.to_string(),
+                "host_device_id": host_id.to_string(),
                 "method": "minos_health",
                 "params": null,
                 "deadline_at_ms": T0 + 1_000,
@@ -1778,7 +1778,7 @@ mod tests {
             &serde_json::json!({
                 "kind": "host_command_issued",
                 "command_id": "cmd-claimed",
-                "host_installation_id": host_id.to_string(),
+                "host_device_id": host_id.to_string(),
                 "method": "minos_health",
                 "params": null,
                 "deadline_at_ms": T0 + 1_000,

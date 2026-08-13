@@ -16,8 +16,7 @@ use crate::config::RuntimeMode;
 use crate::http::BackendState;
 use crate::runtime::AppContext;
 use crate::store::{
-    agent_sessions, device_installations, durable_event_log, outbox_events, AsStorePool,
-    StorePoolRef,
+    agent_sessions, devices, durable_event_log, outbox_events, AsStorePool, StorePoolRef,
 };
 
 /// Host must be offline (no live WS) and last_seen older than this before
@@ -84,7 +83,7 @@ impl Job for SessionLifecycleJob {
 struct OpenHostSession {
     session_id: String,
     conversation_id: String,
-    host_installation_id: String,
+    host_device_id: String,
     status: String,
 }
 
@@ -98,22 +97,22 @@ async fn end_stale_host_sessions(
     let mut ended = 0u32;
 
     for row in rows {
-        let Ok(host_id) = Uuid::parse_str(&row.host_installation_id).map(DeviceId) else {
+        let Ok(host_id) = Uuid::parse_str(&row.host_device_id).map(DeviceId) else {
             tracing::warn!(
                 target: "minos_backend::session_lifecycle",
                 session_id = %row.session_id,
-                host = %row.host_installation_id,
-                "skip session with invalid host_installation_id"
+                host = %row.host_device_id,
+                "skip session with invalid host_device_id"
             );
             continue;
         };
 
         // Live WS ⇒ host is present; never force-end.
-        if state.registry.get(host_id).is_some() {
+        if state.registry.get_host(host_id).is_some() {
             continue;
         }
 
-        let last_seen = match device_installations::get_device(&state.store, host_id).await? {
+        let last_seen = match devices::get_device(&state.store, host_id).await? {
             Some(dev) => dev.last_seen_at,
             None => 0,
         };
@@ -127,7 +126,7 @@ async fn end_stale_host_sessions(
                 target: "minos_backend::session_lifecycle",
                 session_id = %row.session_id,
                 conversation_id = %row.conversation_id,
-                host = %row.host_installation_id,
+                host = %row.host_device_id,
                 status_was = %row.status,
                 last_seen_at_ms = last_seen,
                 "ended stale host agent session"
@@ -145,10 +144,10 @@ async fn list_open_host_sessions(
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
             sqlx::query_as::<_, OpenHostSession>(
-                "SELECT session_id, conversation_id, host_installation_id, status
+                "SELECT session_id, conversation_id, host_device_id, status
                FROM agent_sessions
               WHERE status IN ('pending', 'running', 'stopping')
-                AND host_installation_id IS NOT NULL
+                AND host_device_id IS NOT NULL
                 AND ended_at_ms IS NULL
               ORDER BY started_at_ms ASC
               LIMIT ?",
@@ -159,10 +158,10 @@ async fn list_open_host_sessions(
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, OpenHostSession>(
-                "SELECT session_id, conversation_id, host_installation_id, status
+                "SELECT session_id, conversation_id, host_device_id, status
                FROM agent_sessions
               WHERE status IN ('pending', 'running', 'stopping')
-                AND host_installation_id IS NOT NULL
+                AND host_device_id IS NOT NULL
                 AND ended_at_ms IS NULL
               ORDER BY started_at_ms ASC
               LIMIT $1",
@@ -367,7 +366,7 @@ mod tests {
         let (tx, _rx) = tokio::sync::mpsc::channel(8);
         let conn = std::sync::Arc::new(crate::realtime::ConnectionState::new(
             minos_protocol::realtime::ConnectionPrincipal::Host {
-                host_installation_id: host.to_string(),
+                host_device_id: host.to_string(),
             },
             host,
             DeviceRole::AgentHost,

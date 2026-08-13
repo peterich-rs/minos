@@ -243,21 +243,21 @@ impl RelayClient {
     ) -> Result<minos_protocol::HostPrepareLinkResponse, MinosError> {
         let nonce = self.inner.http.fetch_bootstrap_nonce().await?;
         Ok(minos_protocol::HostPrepareLinkResponse {
-            installation_id: self.inner.http.device_id().to_string(),
+            device_id: self.inner.http.device_id().to_string(),
             public_key: self.inner.http.host_public_key(),
             nonce,
         })
     }
 
-    /// Sign Host Link proof for the local installation.
+    /// Sign Host Link proof for this Mac's DeviceId.
     pub fn sign_link_proof(
         &self,
-        installation_id: &str,
+        device_id: &str,
         nonce: &str,
     ) -> Result<minos_protocol::HostSignLinkProofResponse, MinosError> {
-        if installation_id != self.inner.http.device_id().to_string() {
+        if device_id != self.inner.http.device_id().to_string() {
             return Err(MinosError::BackendInternal {
-                message: "installation_id does not match this host".into(),
+                message: "device_id does not match this host".into(),
             });
         }
         Ok(minos_protocol::HostSignLinkProofResponse {

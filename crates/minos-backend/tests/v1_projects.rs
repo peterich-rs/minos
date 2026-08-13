@@ -84,13 +84,9 @@ async fn formal_project_routes_expose_canonical_conversation_and_agent_session_f
         )
         .await;
     };
-    minos_backend::store::device_installations::set_account_id(
-        &state.store,
-        &mobile,
-        &account.account_id,
-    )
-    .await
-    .unwrap();
+    minos_backend::store::devices::set_account_id(&state.store, &mobile, &account.account_id)
+        .await
+        .unwrap();
     minos_backend::store::host_links::insert_pair(
         &state.store,
         host_device_id,

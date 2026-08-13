@@ -40,13 +40,9 @@ async fn paired_pair_with_account(
         .await
         .unwrap();
     // host account_id stays NULL (kind=host CHECK)
-    minos_backend::store::device_installations::set_account_id(
-        &state.store,
-        &ios,
-        &account.account_id,
-    )
-    .await
-    .unwrap();
+    minos_backend::store::devices::set_account_id(&state.store, &ios, &account.account_id)
+        .await
+        .unwrap();
     host_links::insert_pair(&state.store, host, &account.account_id, ios, 0)
         .await
         .unwrap();
@@ -386,7 +382,7 @@ async fn start_session_dispatches_host_command_and_persists_session() {
     let initial_turn_id = body["initial_turn_id"].as_str().unwrap().to_string();
     assert!(!session_id.is_empty());
     assert_eq!(body["conversation_id"], conversation.conversation_id);
-    assert_eq!(body["host_installation_id"], host_id.to_string());
+    assert_eq!(body["host_device_id"], host_id.to_string());
     assert!(body["started_at_ms"].as_i64().unwrap() >= 1_000);
     assert_eq!(body["initial_turn_id"], initial_turn_id);
 

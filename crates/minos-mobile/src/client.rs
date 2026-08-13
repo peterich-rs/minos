@@ -982,12 +982,12 @@ impl MobileClient {
 
     /// Detect the CLI agents available on the paired runtime.
     pub async fn list_clis(&self) -> Result<ListClisResponse, MinosError> {
-        let host_installation_id = self.require_active_host().await?.to_string();
+        let host_device_id = self.require_active_host().await?.to_string();
         auth_http_call!(self, |http, access| {
             http.list_clis_http(
                 &access,
                 minos_protocol::ListHostClisRequest {
-                    host_installation_id: host_installation_id.clone(),
+                    host_device_id: host_device_id.clone(),
                 },
             )
         })
@@ -999,7 +999,7 @@ impl MobileClient {
         host_device_id: Option<String>,
         force_reload: bool,
     ) -> Result<ListHostSkillsResponse, MinosError> {
-        let host_installation_id = if let Some(host_device_id) = host_device_id {
+        let host_device_id = if let Some(host_device_id) = host_device_id {
             if Uuid::parse_str(&host_device_id).is_err() {
                 return Err(MinosError::RpcCallFailed {
                     method: "minos_list_host_skills".into(),
@@ -1014,7 +1014,7 @@ impl MobileClient {
             http.list_host_skills_http(
                 &access,
                 minos_protocol::ListHostSkillsCommandRequest {
-                    host_installation_id: host_installation_id.clone(),
+                    host_device_id: host_device_id.clone(),
                     workspace: String::new(),
                     force_reload,
                 },
@@ -1029,7 +1029,7 @@ impl MobileClient {
         root: Option<String>,
         limit: u32,
     ) -> Result<minos_protocol::ListHostWorkspacesResponse, MinosError> {
-        let host_installation_id = if let Some(host_device_id) = host_device_id {
+        let host_device_id = if let Some(host_device_id) = host_device_id {
             if Uuid::parse_str(&host_device_id).is_err() {
                 return Err(MinosError::RpcCallFailed {
                     method: "minos_list_host_workspaces".into(),
@@ -1044,7 +1044,7 @@ impl MobileClient {
             http.list_host_workspaces_http(
                 &access,
                 minos_protocol::ListHostWorkspacesCommandRequest {
-                    host_installation_id: host_installation_id.clone(),
+                    host_device_id: host_device_id.clone(),
                     root: root.clone(),
                     limit,
                 },
@@ -1059,7 +1059,7 @@ impl MobileClient {
         path: String,
         enabled: bool,
     ) -> Result<WriteHostSkillConfigResponse, MinosError> {
-        let host_installation_id = if let Some(host_device_id) = host_device_id {
+        let host_device_id = if let Some(host_device_id) = host_device_id {
             if Uuid::parse_str(&host_device_id).is_err() {
                 return Err(MinosError::RpcCallFailed {
                     method: "minos_write_host_skill_config".into(),
@@ -1074,7 +1074,7 @@ impl MobileClient {
             http.write_host_skill_config_http(
                 &access,
                 minos_protocol::WriteHostSkillConfigCommandRequest {
-                    host_installation_id: host_installation_id.clone(),
+                    host_device_id: host_device_id.clone(),
                     workspace: String::new(),
                     path: path.clone(),
                     enabled,

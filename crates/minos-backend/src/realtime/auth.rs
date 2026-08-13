@@ -75,27 +75,17 @@ pub async fn authorize_subscription(
                 Err(SubscriptionDenied::Forbidden.into())
             }
         }
-        (
-            ConnectionPrincipal::Host {
-                host_installation_id,
-            },
-            RealtimeTopic::Host(target_host_id),
-        ) => {
-            if target_host_id == host_installation_id {
+        (ConnectionPrincipal::Host { host_device_id }, RealtimeTopic::Host(target_host_id)) => {
+            if target_host_id == host_device_id {
                 Ok(())
             } else {
                 Err(SubscriptionDenied::Forbidden.into())
             }
         }
-        (
-            ConnectionPrincipal::Host {
-                host_installation_id,
-            },
-            RealtimeTopic::AgentSession(session_id),
-        ) => {
+        (ConnectionPrincipal::Host { host_device_id }, RealtimeTopic::AgentSession(session_id)) => {
             let session = store::agent_sessions::get(store, session_id).await?;
             if session.and_then(|row| row.host_device_id).as_deref()
-                == Some(host_installation_id.as_str())
+                == Some(host_device_id.as_str())
             {
                 Ok(())
             } else {
@@ -205,7 +195,7 @@ mod tests {
         .unwrap();
 
         let principal = ConnectionPrincipal::Host {
-            host_installation_id: host_id.to_string(),
+            host_device_id: host_id.to_string(),
         };
 
         authorize_subscription(&pool, &principal, &RealtimeTopic::Host(host_id.to_string()))

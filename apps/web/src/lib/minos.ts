@@ -59,7 +59,7 @@ export interface MeHostsResponse {
 }
 
 interface FormalHostSummary {
-  host_installation_id: string
+  host_device_id: string
   host_display_name: string | null
   linked_at_ms: number
   online: boolean
@@ -613,7 +613,7 @@ export async function createWsTicket(
   }>>('/v1/realtime/ws-ticket', {
     method: 'POST',
     headers: deviceHeaders(deviceId, accessToken),
-    body: JSON.stringify({ installation_id: deviceId }),
+    body: JSON.stringify({ device_id: deviceId }),
   })
   return {
     ticket: envelope.data.ticket,
@@ -646,7 +646,7 @@ export async function listHosts(
   })
   return {
     hosts: envelope.data.hosts.map((host) => ({
-      host_device_id: host.host_installation_id,
+      host_device_id: host.host_device_id,
       host_display_name: host.host_display_name ?? 'Mac',
       paired_at_ms: host.linked_at_ms,
       paired_via_device_id: '',

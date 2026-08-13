@@ -28,7 +28,7 @@ const HOST_SELF_PATH: &str = "/v1/host/installations/self";
 
 #[derive(Debug, serde::Serialize)]
 struct BootstrapNonceRequest {
-    installation_id: String,
+    device_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -48,7 +48,7 @@ struct HostSelfData {
 
 #[derive(Debug, Deserialize)]
 struct HostSelfLinkSummary {
-    linked_via_installation_id: String,
+    linked_via_device_id: String,
     link_display_name: String,
     paired_at_ms: i64,
     #[serde(default)]
@@ -225,7 +225,7 @@ impl RelayHttpClient {
             None,
             false,
             &BootstrapNonceRequest {
-                installation_id: self.device_id.to_string(),
+                device_id: self.device_id.to_string(),
             },
         )?;
         let resp = self.execute(&url, request).await?;
@@ -379,7 +379,7 @@ fn host_self_links_to_peer_summaries(
 ) -> Result<Vec<HostPeerSummary>, MinosError> {
     let mut peers = Vec::with_capacity(links.len());
     for link in links {
-        let mobile_device_id = uuid::Uuid::parse_str(&link.linked_via_installation_id)
+        let mobile_device_id = uuid::Uuid::parse_str(&link.linked_via_device_id)
             .map(DeviceId)
             .map_err(|e| MinosError::BackendInternal {
                 message: format!("decode host self linked device id: {e}"),
@@ -498,7 +498,7 @@ mod tests {
                 None,
                 true,
                 &serde_json::json!({
-                    "installation_id": client.device_id.to_string(),
+                    "device_id": client.device_id.to_string(),
                 }),
             )
             .unwrap();
@@ -513,7 +513,7 @@ mod tests {
     fn host_self_links_preserve_presence_fields() {
         let mobile_device_id = DeviceId::new();
         let peers = host_self_links_to_peer_summaries(vec![HostSelfLinkSummary {
-            linked_via_installation_id: mobile_device_id.to_string(),
+            linked_via_device_id: mobile_device_id.to_string(),
             link_display_name: "Owner Phone".into(),
             paired_at_ms: 100,
             last_active_at_ms: 900,

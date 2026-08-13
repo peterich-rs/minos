@@ -9,7 +9,7 @@ use minos_backend::http;
 use minos_backend::http::test_support::seed_live_connection;
 use minos_backend::http::test_support::{backend_state, TEST_JWT_SECRET};
 use minos_backend::http::v1::hosts::LINK_PATH;
-use minos_backend::store::{device_installations, host_installation_tokens, host_links};
+use minos_backend::store::{devices, host_links, host_tokens};
 use minos_domain::{DeviceId, DeviceRole};
 use serde_json::json;
 
@@ -26,8 +26,8 @@ fn public_key(signing_key: &SigningKey) -> String {
     )
 }
 
-fn signature(signing_key: &SigningKey, installation_id: &str, nonce: &str, path: &str) -> String {
-    let payload = format!("{installation_id}:{nonce}:{path}");
+fn signature(signing_key: &SigningKey, device_id: &str, nonce: &str, path: &str) -> String {
+    let payload = format!("{device_id}:{nonce}:{path}");
     format!(
         "ed25519-sig:{}",
         URL_SAFE_NO_PAD.encode(signing_key.sign(payload.as_bytes()).to_bytes())
@@ -71,15 +71,13 @@ async fn get_json(
 }
 
 async fn register_desktop(state: &http::BackendState, email: &str) -> (String, String, String) {
-    let installation_id = uuid::Uuid::new_v4().to_string();
-    let device_id = uuid::Uuid::parse_str(&installation_id)
-        .map(DeviceId)
-        .unwrap();
+    let device_id = DeviceId::new();
+    let device_id_str = device_id.to_string();
     let account = minos_backend::store::accounts::create(&state.store, email)
         .await
         .unwrap();
     let account_id = account.account_id.clone();
-    device_installations::insert_client_for_account(
+    devices::insert_client_for_account(
         &state.store,
         device_id,
         "desktop",
@@ -89,16 +87,16 @@ async fn register_desktop(state: &http::BackendState, email: &str) -> (String, S
     )
     .await
     .unwrap();
-    let access = jwt::sign(TEST_JWT_SECRET.as_bytes(), &account_id, &installation_id).unwrap();
-    (access, account_id, installation_id)
+    let access = jwt::sign(TEST_JWT_SECRET.as_bytes(), &account_id, &device_id_str).unwrap();
+    (access, account_id, device_id_str)
 }
 
-async fn issue_nonce(app: &mut axum::Router, installation_id: &str) -> String {
+async fn issue_nonce(app: &mut axum::Router, device_id: &str) -> String {
     let (status, body) = post_json(
         app,
         "/v1/host/bootstrap/nonce",
         &[],
-        json!({"installation_id": installation_id}),
+        json!({"device_id": device_id}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body={body}");
@@ -125,7 +123,7 @@ async fn host_link_unlink_list_round_trip() {
         "/v1/hosts/link",
         &[("authorization", &auth)],
         json!({
-            "installation_id": host_id,
+            "device_id": host_id,
             "nonce": nonce,
             "public_key": pubkey,
             "signature": sig,
@@ -134,7 +132,7 @@ async fn host_link_unlink_list_round_trip() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body={body}");
-    assert_eq!(body["data"]["host_installation_id"], host_id);
+    assert_eq!(body["data"]["host_device_id"], host_id);
     let token = body["data"]["host_installation_token"]
         .as_str()
         .unwrap()
@@ -147,7 +145,7 @@ async fn host_link_unlink_list_round_trip() {
     assert!(host_links::exists(&state.store, host, &account_id)
         .await
         .unwrap());
-    let host_row = device_installations::get_device(&state.store, host)
+    let host_row = devices::get_device(&state.store, host)
         .await
         .unwrap()
         .unwrap();
@@ -167,7 +165,7 @@ async fn host_link_unlink_list_round_trip() {
     assert_eq!(status, StatusCode::OK, "body={body}");
     let hosts = body["data"]["hosts"].as_array().unwrap();
     assert_eq!(hosts.len(), 1);
-    assert_eq!(hosts[0]["host_installation_id"], host_id);
+    assert_eq!(hosts[0]["host_device_id"], host_id);
     assert_eq!(hosts[0]["host_display_name"], "Studio Mac");
     assert_eq!(hosts[0]["online"], true);
 
@@ -175,7 +173,7 @@ async fn host_link_unlink_list_round_trip() {
         &mut app,
         "/v1/hosts/unlink",
         &[("authorization", &auth)],
-        json!({"host_installation_id": host_id}),
+        json!({"host_device_id": host_id}),
     )
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT, "body={body}");
@@ -186,7 +184,7 @@ async fn host_link_unlink_list_round_trip() {
 
     // Token must be revoked (verify_active_token returns None)
     let token_hash = minos_backend::host_link::sha256_hex(&token);
-    let active = host_installation_tokens::verify_active_token(
+    let active = host_tokens::verify_active_token(
         &state.store,
         &token_hash,
         chrono::Utc::now().timestamp_millis(),
@@ -213,7 +211,7 @@ async fn multi_host_list_for_account() {
             "/v1/hosts/link",
             &[("authorization", &auth)],
             json!({
-                "installation_id": host_id,
+                "device_id": host_id,
                 "nonce": nonce,
                 "public_key": public_key(&key),
                 "signature": signature(&key, &host_id, &nonce, LINK_PATH),
@@ -252,7 +250,7 @@ async fn bad_proof_is_rejected() {
         "/v1/hosts/link",
         &[("authorization", &auth)],
         json!({
-            "installation_id": host_id,
+            "device_id": host_id,
             "nonce": nonce,
             "public_key": public_key(&key),
             "signature": bad_sig,
@@ -284,7 +282,7 @@ async fn host_already_linked_elsewhere_returns_409() {
         "/v1/hosts/link",
         &[("authorization", &auth_a)],
         json!({
-            "installation_id": host_id,
+            "device_id": host_id,
             "nonce": nonce,
             "public_key": pubkey,
             "signature": signature(&key, &host_id, &nonce, LINK_PATH),
@@ -300,7 +298,7 @@ async fn host_already_linked_elsewhere_returns_409() {
         "/v1/hosts/link",
         &[("authorization", &auth_b)],
         json!({
-            "installation_id": host_id,
+            "device_id": host_id,
             "nonce": nonce,
             "public_key": pubkey,
             "signature": signature(&key, &host_id, &nonce, LINK_PATH),
@@ -330,7 +328,7 @@ async fn same_account_re_link_rotates_token() {
         "/v1/hosts/link",
         &[("authorization", &auth)],
         json!({
-            "installation_id": host_id,
+            "device_id": host_id,
             "nonce": nonce,
             "public_key": pubkey,
             "signature": signature(&key, &host_id, &nonce, LINK_PATH),
@@ -350,7 +348,7 @@ async fn same_account_re_link_rotates_token() {
         "/v1/hosts/link",
         &[("authorization", &auth)],
         json!({
-            "installation_id": host_id,
+            "device_id": host_id,
             "nonce": nonce,
             "public_key": pubkey,
             "signature": signature(&key, &host_id, &nonce, LINK_PATH),
@@ -369,7 +367,7 @@ async fn same_account_re_link_rotates_token() {
         .unwrap());
 
     let old_hash = minos_backend::host_link::sha256_hex(&token1);
-    let active_old = host_installation_tokens::verify_active_token(
+    let active_old = host_tokens::verify_active_token(
         &state.store,
         &old_hash,
         chrono::Utc::now().timestamp_millis(),
@@ -382,7 +380,7 @@ async fn same_account_re_link_rotates_token() {
     );
 
     let new_hash = minos_backend::host_link::sha256_hex(&token2);
-    let active_new = host_installation_tokens::verify_active_token(
+    let active_new = host_tokens::verify_active_token(
         &state.store,
         &new_hash,
         chrono::Utc::now().timestamp_millis(),
@@ -406,7 +404,7 @@ async fn invalid_nonce_is_rejected() {
         "/v1/hosts/link",
         &[("authorization", &auth)],
         json!({
-            "installation_id": host_id,
+            "device_id": host_id,
             "nonce": "nonce_notreal",
             "public_key": public_key(&key),
             "signature": signature(&key, &host_id, "nonce_notreal", LINK_PATH),

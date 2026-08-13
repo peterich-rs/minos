@@ -1,8 +1,8 @@
 //! SQLite connection pool, schema migrations, and typed CRUD helpers.
 //!
 //! Submodules:
-//! - [`device_installations`] — client/host installation rows (`kind` enum).
-//! - [`host_links`] — account ↔ host installation links.
+//! - [`devices`] — one row per DeviceId (mobile / browser / desktop / host).
+//! - [`host_links`] — account ↔ host DeviceId.
 //! - [`agent_sessions`] — additive agent session metadata scoped to conversations.
 //! - [`agent_turns`] — durable turn metadata for agent sessions.
 //! - [`agent_turn_events`] — per-turn cold-replay stream slices.
@@ -204,11 +204,11 @@ pub mod agent_turn_events;
 pub mod agent_turns;
 pub mod approval_requests;
 pub mod completion_watches;
-pub mod device_installations;
+pub mod devices;
 pub mod durable_event_log;
 pub mod host_commands;
-pub mod host_installation_tokens;
 pub mod host_links;
+pub mod host_tokens;
 pub mod media_blobs;
 pub mod message_attachments;
 pub mod notification_cooldowns;
@@ -224,7 +224,7 @@ pub mod sessions;
 pub mod social;
 pub mod thread_sync_state;
 
-pub use device_installations::{get_device, DeviceRow};
+pub use devices::{get_device, DeviceRow};
 
 #[must_use]
 pub const fn sqlite_backend_enabled() -> bool {
@@ -470,7 +470,7 @@ pub mod test_support {
     /// `DeviceId`. Client auth is bearer-only (no device secret).
     pub async fn insert_ios_device(pool: &SqlitePool, account_id: &str) -> DeviceId {
         let id = DeviceId::new();
-        crate::store::device_installations::insert_client_for_account(
+        crate::store::devices::insert_client_for_account(
             pool,
             id,
             "iPhone",
@@ -493,7 +493,7 @@ pub mod test_support {
         name: &str,
         now: i64,
     ) {
-        crate::store::device_installations::insert_host_with_public_key(
+        crate::store::devices::insert_host_with_public_key(
             pool,
             id,
             name,
@@ -504,7 +504,9 @@ pub mod test_support {
         .unwrap();
     }
 
-    /// Issue a plaintext `hit_*` host installation token for tests and store its hash.
+    /// Issue a plaintext `hit_*` host token bound to one account.
+    ///
+    /// Host WS auth requires the token to resolve to exactly one account.
     /// Returns the bearer token string (including `hit_` prefix).
     pub async fn issue_test_host_token(
         pool: &impl crate::store::AsStorePool,
@@ -513,6 +515,40 @@ pub mod test_support {
     ) -> String {
         use base64::engine::general_purpose::URL_SAFE_NO_PAD;
         use base64::Engine;
+        let existing = crate::store::host_links::list_accounts_for_host(pool, host_id)
+            .await
+            .unwrap();
+        let account_id = if let Some(link) = existing.first() {
+            link.mobile_account_id.clone()
+        } else {
+            let email = format!("host-fixture-{host_id}@localhost");
+            let account_id = crate::store::accounts::create(pool, &email)
+                .await
+                .unwrap()
+                .account_id;
+            let via = DeviceId::new();
+            crate::store::devices::insert_client_for_account(
+                pool,
+                via,
+                "fixture-client",
+                DeviceRole::DesktopConsole,
+                &account_id,
+                now,
+            )
+            .await
+            .unwrap();
+            crate::store::host_links::upsert_link(
+                pool,
+                host_id,
+                &account_id,
+                via,
+                Some("fixture host"),
+                now,
+            )
+            .await
+            .unwrap();
+            account_id
+        };
         let mut bytes = [0_u8; 24];
         getrandom::fill(&mut bytes).expect("OS CSPRNG");
         let token = format!("hit_{}", URL_SAFE_NO_PAD.encode(bytes));
@@ -520,10 +556,11 @@ pub mod test_support {
         match pool.as_store_pool() {
             crate::store::StorePoolRef::Sqlite(p) => {
                 let mut tx = p.begin().await.unwrap();
-                crate::store::host_installation_tokens::insert_token_with_executor(
+                crate::store::host_tokens::insert_token_with_executor(
                     &mut *tx,
                     &token_hash,
                     host_id,
+                    Some(&account_id),
                     now,
                 )
                 .await
@@ -532,10 +569,11 @@ pub mod test_support {
             }
             crate::store::StorePoolRef::Postgres(p) => {
                 let mut tx = p.begin().await.unwrap();
-                crate::store::host_installation_tokens::insert_token_with_postgres_executor(
+                crate::store::host_tokens::insert_token_with_postgres_executor(
                     &mut *tx,
                     &token_hash,
                     host_id,
+                    Some(&account_id),
                     now,
                 )
                 .await
@@ -566,11 +604,9 @@ pub mod test_support {
         name: &str,
         now: i64,
     ) {
-        crate::store::device_installations::insert_client_for_account(
-            pool, id, name, role, account_id, now,
-        )
-        .await
-        .unwrap();
+        crate::store::devices::insert_client_for_account(pool, id, name, role, account_id, now)
+            .await
+            .unwrap();
     }
 }
 

@@ -30,13 +30,12 @@ pub struct RefreshTokenRow {
     pub rotated_to_hash: Option<String>,
 }
 
-const REFRESH_SELECT_SQLITE: &str = "SELECT token_hash, account_id, installation_id AS device_id, \
+const REFRESH_SELECT_SQLITE: &str = "SELECT token_hash, account_id, device_id AS device_id, \
      issued_at_ms AS issued_at, expires_at_ms AS expires_at, revoked_at_ms AS revoked_at, \
      rotated_to_hash \
      FROM refresh_tokens";
 
-const REFRESH_SELECT_POSTGRES: &str =
-    "SELECT token_hash, account_id, installation_id AS device_id, \
+const REFRESH_SELECT_POSTGRES: &str = "SELECT token_hash, account_id, device_id AS device_id, \
      issued_at_ms AS issued_at, expires_at_ms AS expires_at, revoked_at_ms AS revoked_at, \
      rotated_to_hash \
      FROM refresh_tokens";
@@ -284,7 +283,7 @@ pub async fn revoke_all_for_device(
     let now = Utc::now().timestamp_millis();
     let result = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => sqlx::query(
-            "UPDATE refresh_tokens SET revoked_at_ms = ? WHERE installation_id = ? AND revoked_at_ms IS NULL",
+            "UPDATE refresh_tokens SET revoked_at_ms = ? WHERE device_id = ? AND revoked_at_ms IS NULL",
         )
         .bind(now)
         .bind(device_id)
@@ -292,7 +291,7 @@ pub async fn revoke_all_for_device(
         .await
         .map(|result| result.rows_affected()),
         StorePoolRef::Postgres(pool) => sqlx::query(
-            "UPDATE refresh_tokens SET revoked_at_ms = $1 WHERE installation_id = $2 AND revoked_at_ms IS NULL",
+            "UPDATE refresh_tokens SET revoked_at_ms = $1 WHERE device_id = $2 AND revoked_at_ms IS NULL",
         )
         .bind(now)
         .bind(device_id)
@@ -334,7 +333,7 @@ pub async fn gc_expired(store: &impl AsStorePool, now_ms: i64) -> Result<u64, Ba
 
 async fn insert_sqlite(pool: &SqlitePool, row: &RefreshTokenRow) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "INSERT INTO refresh_tokens (token_hash, account_id, installation_id, issued_at_ms, expires_at_ms)
+        "INSERT INTO refresh_tokens (token_hash, account_id, device_id, issued_at_ms, expires_at_ms)
            VALUES (?, ?, ?, ?, ?)",
     )
     .bind(&row.token_hash)
@@ -349,7 +348,7 @@ async fn insert_sqlite(pool: &SqlitePool, row: &RefreshTokenRow) -> Result<(), s
 
 async fn insert_postgres(pool: &PgPool, row: &RefreshTokenRow) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "INSERT INTO refresh_tokens (token_hash, account_id, installation_id, issued_at_ms, expires_at_ms)
+        "INSERT INTO refresh_tokens (token_hash, account_id, device_id, issued_at_ms, expires_at_ms)
            VALUES ($1, $2, $3, $4, $5)",
     )
     .bind(&row.token_hash)
@@ -379,7 +378,7 @@ async fn rotate_sqlite(
     let new_hash = hash_plaintext(new_plaintext);
     let expires_at = now + REFRESH_TTL_MS;
     sqlx::query(
-        "INSERT INTO refresh_tokens (token_hash, account_id, installation_id, issued_at_ms, expires_at_ms)
+        "INSERT INTO refresh_tokens (token_hash, account_id, device_id, issued_at_ms, expires_at_ms)
            VALUES (?, ?, ?, ?, ?)",
     )
     .bind(&new_hash)
@@ -446,7 +445,7 @@ async fn rotate_postgres(
     let new_hash = hash_plaintext(new_plaintext);
     let expires_at = now + REFRESH_TTL_MS;
     sqlx::query(
-        "INSERT INTO refresh_tokens (token_hash, account_id, installation_id, issued_at_ms, expires_at_ms)
+        "INSERT INTO refresh_tokens (token_hash, account_id, device_id, issued_at_ms, expires_at_ms)
            VALUES ($1, $2, $3, $4, $5)",
     )
     .bind(&new_hash)

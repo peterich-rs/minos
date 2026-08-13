@@ -12,15 +12,40 @@ use std::sync::Arc;
 
 use dashmap::DashMap;
 use minos_domain::{DeviceId, DeviceRole};
+use minos_protocol::realtime::ConnectionPrincipal;
 
 use super::subscription::ConnectionState;
 
 pub use super::subscription::ConnectionRevocation;
 
-/// Concurrent map of `DeviceId →` current formal connection.
+/// One physical DeviceId may hold both an Account IM socket and a Host
+/// runtime socket. Kick-old is per rail, not per UUID.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ConnectionRail {
+    Account,
+    Host,
+}
+
+impl ConnectionRail {
+    #[must_use]
+    pub fn from_principal(principal: &ConnectionPrincipal) -> Self {
+        match principal {
+            ConnectionPrincipal::Account { .. } => Self::Account,
+            ConnectionPrincipal::Host { .. } => Self::Host,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct RegistryKey {
+    rail: ConnectionRail,
+    device_id: DeviceId,
+}
+
+/// Concurrent map of `(rail, DeviceId) →` current formal connection.
 #[derive(Debug, Clone, Default)]
 pub struct RealtimeConnectionRegistry {
-    connections: Arc<DashMap<DeviceId, Arc<ConnectionState>>>,
+    connections: Arc<DashMap<RegistryKey, Arc<ConnectionState>>>,
     /// account_id → wall-clock ms of last "last mobile client left" edge.
     last_mobile_disconnect_at_ms: Arc<DashMap<String, i64>>,
 }
@@ -42,7 +67,11 @@ impl RealtimeConnectionRegistry {
                 self.last_mobile_disconnect_at_ms.remove(account_id);
             }
         }
-        let previous = self.connections.insert(conn.device_id, conn);
+        let key = RegistryKey {
+            rail: ConnectionRail::from_principal(&conn.principal),
+            device_id: conn.device_id,
+        };
+        let previous = self.connections.insert(key, conn);
         crate::telemetry::set_session_registry_size(self.len());
         if let Some(ref prev) = previous {
             self.note_mobile_connection_left(prev);
@@ -50,24 +79,14 @@ impl RealtimeConnectionRegistry {
         previous
     }
 
-    /// Remove and return the connection for `id`, or `None` if none was live.
-    pub fn remove(&self, id: DeviceId) -> Option<Arc<ConnectionState>> {
-        let removed = self.connections.remove(&id).map(|(_k, v)| v);
-        if let Some(ref conn) = removed {
-            crate::telemetry::set_session_registry_size(self.len());
-            self.note_mobile_connection_left(conn);
-        }
-        removed
-    }
-
-    /// Remove and return `current` only if it is still the live entry.
-    ///
-    /// ABA-safe disconnect cleanup: an old socket may close after a
-    /// reconnect already inserted a replacement for the same `DeviceId`.
-    pub fn remove_current(&self, current: &ConnectionState) -> Option<Arc<ConnectionState>> {
+    /// Remove and return the connection for `id` on `rail`, or `None`.
+    pub fn remove_rail(&self, rail: ConnectionRail, id: DeviceId) -> Option<Arc<ConnectionState>> {
         let removed = self
             .connections
-            .remove_if(&current.device_id, |_, live| live.same_connection(current))
+            .remove(&RegistryKey {
+                rail,
+                device_id: id,
+            })
             .map(|(_k, v)| v);
         if let Some(ref conn) = removed {
             crate::telemetry::set_session_registry_size(self.len());
@@ -76,23 +95,70 @@ impl RealtimeConnectionRegistry {
         removed
     }
 
-    /// Clone the current connection for `id` if live.
+    /// Remove the Account-rail connection for `id` (tests / mobile grace).
+    pub fn remove(&self, id: DeviceId) -> Option<Arc<ConnectionState>> {
+        self.remove_rail(ConnectionRail::Account, id)
+            .or_else(|| self.remove_rail(ConnectionRail::Host, id))
+    }
+
+    /// Remove and return `current` only if it is still the live entry.
+    ///
+    /// ABA-safe disconnect cleanup: an old socket may close after a
+    /// reconnect already inserted a replacement for the same `DeviceId`.
+    pub fn remove_current(&self, current: &ConnectionState) -> Option<Arc<ConnectionState>> {
+        let key = RegistryKey {
+            rail: ConnectionRail::from_principal(&current.principal),
+            device_id: current.device_id,
+        };
+        let removed = self
+            .connections
+            .remove_if(&key, |_, live| live.same_connection(current))
+            .map(|(_k, v)| v);
+        if let Some(ref conn) = removed {
+            crate::telemetry::set_session_registry_size(self.len());
+            self.note_mobile_connection_left(conn);
+        }
+        removed
+    }
+
+    /// Clone the current connection for `rail` + `id` if live.
+    #[must_use]
+    pub fn get_rail(&self, rail: ConnectionRail, id: DeviceId) -> Option<Arc<ConnectionState>> {
+        self.connections
+            .get(&RegistryKey {
+                rail,
+                device_id: id,
+            })
+            .map(|r| Arc::clone(r.value()))
+    }
+
+    /// Live Host-rail socket for this DeviceId (bot execution / host online).
+    #[must_use]
+    pub fn get_host(&self, id: DeviceId) -> Option<Arc<ConnectionState>> {
+        self.get_rail(ConnectionRail::Host, id)
+    }
+
+    /// Live Account-rail socket for this DeviceId.
+    #[must_use]
+    pub fn get_account(&self, id: DeviceId) -> Option<Arc<ConnectionState>> {
+        self.get_rail(ConnectionRail::Account, id)
+    }
+
+    /// Prefer Host rail, then Account — used by tests that insert a single role.
     #[must_use]
     pub fn get(&self, id: DeviceId) -> Option<Arc<ConnectionState>> {
-        self.connections.get(&id).map(|r| Arc::clone(r.value()))
+        self.get_host(id).or_else(|| self.get_account(id))
     }
 
-    /// True when a formal connection is live for `id`.
+    /// True when a Host-rail connection is live for `id`.
     #[must_use]
     pub fn is_online(&self, id: DeviceId) -> bool {
-        self.connections.contains_key(&id)
+        self.get_host(id).is_some()
     }
 
-    /// Revoke and remove the live connection for `device_id` if present.
-    ///
-    /// Returns `true` when a connection was revoked.
+    /// Revoke the Host-rail connection (unlink / token revoke).
     pub fn revoke_device(&self, device_id: DeviceId, reason: ConnectionRevocation) -> bool {
-        let Some(conn) = self.remove(device_id) else {
+        let Some(conn) = self.remove_rail(ConnectionRail::Host, device_id) else {
             return false;
         };
         conn.revoke(reason);
@@ -104,9 +170,11 @@ impl RealtimeConnectionRegistry {
     /// Does not wait for sockets to drain; the gateway loop reacts to
     /// the revocation watch and closes each formal connection.
     pub fn revoke_all(&self, reason: ConnectionRevocation) {
-        let ids: Vec<DeviceId> = self.connections.iter().map(|e| *e.key()).collect();
-        for id in ids {
-            let _ = self.revoke_device(id, reason);
+        let keys: Vec<RegistryKey> = self.connections.iter().map(|e| *e.key()).collect();
+        for key in keys {
+            if let Some(conn) = self.remove_rail(key.rail, key.device_id) {
+                conn.revoke(reason);
+            }
         }
     }
 
@@ -193,7 +261,7 @@ mod tests {
         let (tx, _rx) = mpsc::channel::<ServerFrame>(8);
         let principal = match role {
             DeviceRole::AgentHost => ConnectionPrincipal::Host {
-                host_installation_id: device_id.to_string(),
+                host_device_id: device_id.to_string(),
             },
             _ => ConnectionPrincipal::Account {
                 account_id: account_id.unwrap_or("acct-1").to_string(),
@@ -246,6 +314,21 @@ mod tests {
         reg.remove_current(&c2);
         assert!(reg.last_mobile_disconnect_at_ms("acct").is_some());
         assert_eq!(reg.mobile_client_session_count("acct"), 0);
+    }
+
+    #[test]
+    fn account_and_host_share_device_id_without_kick() {
+        let reg = RealtimeConnectionRegistry::new();
+        let id = DeviceId::new();
+        let account = make_conn(id, DeviceRole::DesktopConsole, Some("acct"));
+        let host = make_conn(id, DeviceRole::AgentHost, None);
+        assert!(reg.insert(Arc::clone(&account)).is_none());
+        assert!(reg.insert(Arc::clone(&host)).is_none());
+        assert!(reg.get_account(id).unwrap().same_connection(&account));
+        assert!(reg.get_host(id).unwrap().same_connection(&host));
+        assert!(reg.remove_current(&account).is_some());
+        assert!(reg.get_host(id).is_some());
+        assert!(reg.get_account(id).is_none());
     }
 
     #[test]

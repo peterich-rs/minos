@@ -39,7 +39,7 @@ pub struct AccountRow {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstallationRow {
-    pub installation_id: String,
+    pub device_id: String,
     pub kind: String,
     pub platform: Option<String>,
     pub public_key: Option<String>,
@@ -53,7 +53,7 @@ pub struct InstallationRow {
 pub struct RefreshTokenRow {
     pub token_hash: String,
     pub account_id: String,
-    pub installation_id: String,
+    pub device_id: String,
     pub issued_at_ms: i64,
     pub expires_at_ms: i64,
     pub revoked_at_ms: Option<i64>,
@@ -63,7 +63,7 @@ pub struct RefreshTokenRow {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostTokenRow {
     pub token_hash: String,
-    pub host_installation_id: String,
+    pub host_device_id: String,
     pub issued_at_ms: i64,
     pub last_used_at_ms: Option<i64>,
     pub revoked_at_ms: Option<i64>,
@@ -73,8 +73,8 @@ pub struct HostTokenRow {
 pub struct HostLinkRow {
     pub pair_id: String,
     pub account_id: String,
-    pub host_installation_id: String,
-    pub linked_via_installation_id: String,
+    pub host_device_id: String,
+    pub linked_via_device_id: String,
     pub link_display_name: Option<String>,
     pub acl_json: String,
     pub paired_at_ms: i64,
@@ -166,7 +166,7 @@ pub struct AuditRow {
     pub audit_id: String,
     pub actor_kind: String,
     pub account_id: Option<String>,
-    pub installation_id: Option<String>,
+    pub device_id: Option<String>,
     pub event_type: String,
     pub metadata: Option<String>,
     pub at_ms: i64,
@@ -176,7 +176,7 @@ pub struct AuditRow {
 pub struct PushTokenRow {
     pub token_hash: String,
     pub account_id: String,
-    pub installation_id: String,
+    pub device_id: String,
     pub kind: String,
     pub locale: Option<String>,
     pub created_at_ms: i64,
@@ -295,7 +295,7 @@ pub trait AccountsRepository: Send + Sync {
 pub trait InstallationsRepository: Send + Sync {
     async fn upsert(
         &self,
-        installation_id: &str,
+        device_id: &str,
         kind: &str,
         platform: Option<&str>,
         public_key: Option<&str>,
@@ -304,9 +304,9 @@ pub trait InstallationsRepository: Send + Sync {
         at_ms: i64,
     ) -> Result<InstallationRow, BackendError>;
 
-    async fn find(&self, installation_id: &str) -> Result<Option<InstallationRow>, BackendError>;
+    async fn find(&self, device_id: &str) -> Result<Option<InstallationRow>, BackendError>;
 
-    async fn touch_last_seen(&self, installation_id: &str, at_ms: i64) -> Result<(), BackendError>;
+    async fn touch_last_seen(&self, device_id: &str, at_ms: i64) -> Result<(), BackendError>;
 }
 
 #[async_trait]
@@ -315,7 +315,7 @@ pub trait RefreshTokensRepository: Send + Sync {
         &self,
         plaintext: &str,
         account_id: &str,
-        installation_id: &str,
+        device_id: &str,
         ttl_ms: i64,
         at_ms: i64,
     ) -> Result<RefreshTokenRow, BackendError>;
@@ -339,7 +339,7 @@ pub trait RefreshTokensRepository: Send + Sync {
 
 #[async_trait]
 pub trait HostInstallationTokensRepository: Send + Sync {
-    async fn insert(&self, host_installation_id: &str, at_ms: i64) -> Result<String, BackendError>;
+    async fn insert(&self, host_device_id: &str, at_ms: i64) -> Result<String, BackendError>;
 
     async fn find_active(&self, token_hash: &str) -> Result<Option<HostTokenRow>, BackendError>;
 
@@ -351,33 +351,22 @@ pub trait HostLinksRepository: Send + Sync {
     async fn insert(
         &self,
         account_id: &str,
-        host_installation_id: &str,
+        host_device_id: &str,
         linked_via: &str,
         display_name: Option<&str>,
         acl_json: &str,
         at_ms: i64,
     ) -> Result<HostLinkRow, BackendError>;
 
-    async fn exists(
-        &self,
-        account_id: &str,
-        host_installation_id: &str,
-    ) -> Result<bool, BackendError>;
+    async fn exists(&self, account_id: &str, host_device_id: &str) -> Result<bool, BackendError>;
 
     async fn list_for_account(&self, account_id: &str) -> Result<Vec<HostLinkRow>, BackendError>;
 
-    async fn list_for_host(
-        &self,
-        host_installation_id: &str,
-    ) -> Result<Vec<HostLinkRow>, BackendError>;
+    async fn list_for_host(&self, host_device_id: &str) -> Result<Vec<HostLinkRow>, BackendError>;
 
     async fn pick_default_host(&self, account_id: &str) -> Result<Option<String>, BackendError>;
 
-    async fn remove(
-        &self,
-        account_id: &str,
-        host_installation_id: &str,
-    ) -> Result<bool, BackendError>;
+    async fn remove(&self, account_id: &str, host_device_id: &str) -> Result<bool, BackendError>;
 }
 
 #[async_trait]
@@ -547,7 +536,7 @@ pub trait AuditRepository: Send + Sync {
         &self,
         actor_kind: &str,
         account_id: Option<&str>,
-        installation_id: Option<&str>,
+        device_id: Option<&str>,
         event_type: &str,
         metadata: Option<&str>,
         at_ms: i64,
@@ -566,7 +555,7 @@ pub trait PushTokensRepository: Send + Sync {
     async fn upsert(
         &self,
         account_id: &str,
-        installation_id: &str,
+        device_id: &str,
         kind: &str,
         token: &str,
         locale: Option<&str>,
@@ -594,7 +583,7 @@ pub struct RepositorySet {
     pub accounts: Arc<dyn AccountsRepository>,
     pub installations: Arc<dyn InstallationsRepository>,
     pub refresh_tokens: Arc<dyn RefreshTokensRepository>,
-    pub host_installation_tokens: Arc<dyn HostInstallationTokensRepository>,
+    pub host_tokens: Arc<dyn HostInstallationTokensRepository>,
     pub host_links: Arc<dyn HostLinksRepository>,
     pub agents: Arc<dyn AgentsRepository>,
     pub projects: Arc<dyn ProjectsRepository>,
@@ -634,7 +623,7 @@ impl RepositorySet {
             refresh_tokens: Arc::new(StoreBackedRefreshTokensRepository {
                 store: store.clone(),
             }),
-            host_installation_tokens: Arc::new(StoreBackedHostInstallationTokensRepository {
+            host_tokens: Arc::new(StoreBackedHostInstallationTokensRepository {
                 store: store.clone(),
             }),
             host_links: Arc::new(StoreBackedHostLinksRepository {
@@ -872,11 +861,11 @@ impl AccountsRepository for StoreBackedAccountsRepository {
 // Store-backed implementations — InstallationsRepository
 // ---------------------------------------------------------------------------
 
-fn convert_installation_row(row: store::device_installations::DeviceRow) -> InstallationRow {
+fn convert_installation_row(row: store::devices::DeviceRow) -> InstallationRow {
     InstallationRow {
-        installation_id: row.device_id.to_string(),
+        device_id: row.device_id.to_string(),
         // Storage vocabulary (mobile/browser/desktop/host), not wire role.
-        kind: row.role.to_installation_kind().to_string(),
+        kind: row.role.to_device_kind().to_string(),
         platform: None,
         public_key: row.public_key,
         account_id: row.account_id,
@@ -894,7 +883,7 @@ struct StoreBackedInstallationsRepository {
 impl InstallationsRepository for StoreBackedInstallationsRepository {
     async fn upsert(
         &self,
-        installation_id: &str,
+        device_id: &str,
         kind: &str,
         _platform: Option<&str>,
         public_key: Option<&str>,
@@ -902,14 +891,15 @@ impl InstallationsRepository for StoreBackedInstallationsRepository {
         display_name: Option<&str>,
         at_ms: i64,
     ) -> Result<InstallationRow, BackendError> {
-        let device_id = Uuid::parse_str(installation_id)
-            .map(DeviceId)
-            .map_err(|e| BackendError::StoreDecode {
-                column: "installation_id".into(),
-                message: e.to_string(),
-            })?;
-        // Accept either installation_kind (`mobile`) or wire role (`mobile-client`).
-        let role = minos_domain::DeviceRole::from_installation_kind(kind)
+        let device_id =
+            Uuid::parse_str(device_id)
+                .map(DeviceId)
+                .map_err(|e| BackendError::StoreDecode {
+                    column: "device_id".into(),
+                    message: e.to_string(),
+                })?;
+        // Accept either device_kind (`mobile`) or wire role (`mobile-client`).
+        let role = minos_domain::DeviceRole::from_device_kind(kind)
             .or_else(|_| kind.parse::<minos_domain::DeviceRole>())
             .map_err(|e| BackendError::StoreQuery {
                 operation: "installations.upsert".into(),
@@ -917,7 +907,7 @@ impl InstallationsRepository for StoreBackedInstallationsRepository {
             })?;
         let name = display_name.unwrap_or("device");
 
-        if store::device_installations::get_device(&self.store, device_id)
+        if store::devices::get_device(&self.store, device_id)
             .await?
             .is_none()
         {
@@ -927,7 +917,7 @@ impl InstallationsRepository for StoreBackedInstallationsRepository {
                     operation: "installations.upsert".into(),
                     message: "account_id required for client installation kinds".into(),
                 })?;
-                store::device_installations::insert_client_for_account(
+                store::devices::insert_client_for_account(
                     &self.store,
                     device_id,
                     name,
@@ -941,7 +931,7 @@ impl InstallationsRepository for StoreBackedInstallationsRepository {
                     operation: "installations.upsert".into(),
                     message: "public_key required for host installations".into(),
                 })?;
-                store::device_installations::insert_host_with_public_key(
+                store::devices::insert_host_with_public_key(
                     &self.store,
                     device_id,
                     name,
@@ -957,27 +947,19 @@ impl InstallationsRepository for StoreBackedInstallationsRepository {
             }
         } else {
             if let Some(pk) = public_key {
-                let _ = store::device_installations::set_public_key_if_absent(
-                    &self.store,
-                    &device_id,
-                    pk,
-                )
-                .await;
+                let _ = store::devices::set_public_key_if_absent(&self.store, &device_id, pk).await;
             }
             if let Some(aid) = account_id {
                 if role.is_account_client() {
-                    let _ =
-                        store::device_installations::set_account_id(&self.store, &device_id, aid)
-                            .await;
+                    let _ = store::devices::set_account_id(&self.store, &device_id, aid).await;
                 }
             }
             if let Some(dn) = display_name {
-                let _ = store::device_installations::set_display_name(&self.store, &device_id, dn)
-                    .await;
+                let _ = store::devices::set_display_name(&self.store, &device_id, dn).await;
             }
         }
 
-        match store::device_installations::get_device(&self.store, device_id).await? {
+        match store::devices::get_device(&self.store, device_id).await? {
             Some(row) => Ok(convert_installation_row(row)),
             None => Err(BackendError::StoreQuery {
                 operation: "installations.upsert".into(),
@@ -986,47 +968,42 @@ impl InstallationsRepository for StoreBackedInstallationsRepository {
         }
     }
 
-    async fn find(&self, installation_id: &str) -> Result<Option<InstallationRow>, BackendError> {
-        let device_id = Uuid::parse_str(installation_id)
-            .map(DeviceId)
-            .map_err(|e| BackendError::StoreDecode {
-                column: "installation_id".into(),
-                message: e.to_string(),
-            })?;
-        Ok(
-            store::device_installations::get_device(&self.store, device_id)
-                .await?
-                .map(convert_installation_row),
-        )
+    async fn find(&self, device_id: &str) -> Result<Option<InstallationRow>, BackendError> {
+        let device_id =
+            Uuid::parse_str(device_id)
+                .map(DeviceId)
+                .map_err(|e| BackendError::StoreDecode {
+                    column: "device_id".into(),
+                    message: e.to_string(),
+                })?;
+        Ok(store::devices::get_device(&self.store, device_id)
+            .await?
+            .map(convert_installation_row))
     }
 
-    async fn touch_last_seen(&self, installation_id: &str, at_ms: i64) -> Result<(), BackendError> {
+    async fn touch_last_seen(&self, device_id: &str, at_ms: i64) -> Result<(), BackendError> {
         match self.store.as_store_pool() {
             StorePoolRef::Sqlite(pool) => {
-                sqlx::query(
-                    "UPDATE device_installations SET last_seen_at_ms = ? WHERE installation_id = ?",
-                )
-                .bind(at_ms)
-                .bind(installation_id)
-                .execute(pool)
-                .await
-                .map_err(|e| BackendError::StoreQuery {
-                    operation: "installations.touch_last_seen".into(),
-                    message: e.to_string(),
-                })?;
+                sqlx::query("UPDATE devices SET last_seen_at_ms = ? WHERE device_id = ?")
+                    .bind(at_ms)
+                    .bind(device_id)
+                    .execute(pool)
+                    .await
+                    .map_err(|e| BackendError::StoreQuery {
+                        operation: "installations.touch_last_seen".into(),
+                        message: e.to_string(),
+                    })?;
             }
             StorePoolRef::Postgres(pool) => {
-                sqlx::query(
-                    "UPDATE device_installations SET last_seen_at_ms = $1 WHERE installation_id = $2",
-                )
-                .bind(at_ms)
-                .bind(installation_id)
-                .execute(pool)
-                .await
-                .map_err(|e| BackendError::StoreQuery {
-                    operation: "installations.touch_last_seen".into(),
-                    message: e.to_string(),
-                })?;
+                sqlx::query("UPDATE devices SET last_seen_at_ms = $1 WHERE device_id = $2")
+                    .bind(at_ms)
+                    .bind(device_id)
+                    .execute(pool)
+                    .await
+                    .map_err(|e| BackendError::StoreQuery {
+                        operation: "installations.touch_last_seen".into(),
+                        message: e.to_string(),
+                    })?;
             }
         }
         Ok(())
@@ -1041,7 +1018,7 @@ fn convert_refresh_token_row(row: store::refresh_tokens::RefreshTokenRow) -> Ref
     RefreshTokenRow {
         token_hash: row.token_hash,
         account_id: row.account_id,
-        installation_id: row.device_id,
+        device_id: row.device_id,
         issued_at_ms: row.issued_at,
         expires_at_ms: row.expires_at,
         revoked_at_ms: row.revoked_at,
@@ -1059,13 +1036,12 @@ impl RefreshTokensRepository for StoreBackedRefreshTokensRepository {
         &self,
         plaintext: &str,
         account_id: &str,
-        installation_id: &str,
+        device_id: &str,
         _ttl_ms: i64,
         _at_ms: i64,
     ) -> Result<RefreshTokenRow, BackendError> {
         let row =
-            store::refresh_tokens::insert(&self.store, plaintext, account_id, installation_id)
-                .await?;
+            store::refresh_tokens::insert(&self.store, plaintext, account_id, device_id).await?;
         Ok(convert_refresh_token_row(row))
     }
 
@@ -1119,12 +1095,10 @@ impl RefreshTokensRepository for StoreBackedRefreshTokensRepository {
 // Store-backed implementations — HostInstallationTokensRepository
 // ---------------------------------------------------------------------------
 
-fn convert_host_token_row(
-    row: store::host_installation_tokens::HostInstallationTokenRow,
-) -> HostTokenRow {
+fn convert_host_token_row(row: store::host_tokens::HostInstallationTokenRow) -> HostTokenRow {
     HostTokenRow {
         token_hash: row.token_hash,
-        host_installation_id: row.host_installation_id.to_string(),
+        host_device_id: row.host_device_id.to_string(),
         issued_at_ms: row.issued_at_ms,
         last_used_at_ms: row.last_used_at_ms,
         revoked_at_ms: row.revoked_at_ms,
@@ -1137,13 +1111,13 @@ struct StoreBackedHostInstallationTokensRepository {
 
 #[async_trait]
 impl HostInstallationTokensRepository for StoreBackedHostInstallationTokensRepository {
-    async fn insert(&self, host_installation_id: &str, at_ms: i64) -> Result<String, BackendError> {
-        let device_id = Uuid::parse_str(host_installation_id)
-            .map(DeviceId)
-            .map_err(|e| BackendError::StoreDecode {
-                column: "host_installation_id".into(),
+    async fn insert(&self, host_device_id: &str, at_ms: i64) -> Result<String, BackendError> {
+        let device_id = Uuid::parse_str(host_device_id).map(DeviceId).map_err(|e| {
+            BackendError::StoreDecode {
+                column: "host_device_id".into(),
                 message: e.to_string(),
-            })?;
+            }
+        })?;
         // Generate a random 32-byte token and hash it.
         let mut bytes = [0u8; 32];
         getrandom::fill(&mut bytes).expect("OS CSPRNG must be available");
@@ -1153,19 +1127,21 @@ impl HostInstallationTokensRepository for StoreBackedHostInstallationTokensRepos
 
         match self.store.as_store_pool() {
             StorePoolRef::Sqlite(pool) => {
-                store::host_installation_tokens::insert_token_with_executor(
+                store::host_tokens::insert_token_with_executor(
                     pool,
                     &token_hash_hex,
                     device_id,
+                    None,
                     at_ms,
                 )
                 .await?;
             }
             StorePoolRef::Postgres(pool) => {
-                store::host_installation_tokens::insert_token_with_postgres_executor(
+                store::host_tokens::insert_token_with_postgres_executor(
                     pool,
                     &token_hash_hex,
                     device_id,
+                    None,
                     at_ms,
                 )
                 .await?;
@@ -1179,7 +1155,7 @@ impl HostInstallationTokensRepository for StoreBackedHostInstallationTokensRepos
         // which is acceptable for the host authentication flow.
         let now_ms = chrono::Utc::now().timestamp_millis();
         Ok(
-            store::host_installation_tokens::verify_active_token(&self.store, token_hash, now_ms)
+            store::host_tokens::verify_active_token(&self.store, token_hash, now_ms)
                 .await?
                 .map(convert_host_token_row),
         )
@@ -1188,7 +1164,7 @@ impl HostInstallationTokensRepository for StoreBackedHostInstallationTokensRepos
     async fn revoke(&self, token_hash: &str, at_ms: i64) -> Result<bool, BackendError> {
         let affected = match self.store.as_store_pool() {
             StorePoolRef::Sqlite(pool) => sqlx::query(
-                "UPDATE host_installation_tokens SET revoked_at_ms = ? \
+                "UPDATE host_tokens SET revoked_at_ms = ? \
                      WHERE token_hash = ? AND revoked_at_ms IS NULL",
             )
             .bind(at_ms)
@@ -1197,7 +1173,7 @@ impl HostInstallationTokensRepository for StoreBackedHostInstallationTokensRepos
             .await
             .map(|r| r.rows_affected()),
             StorePoolRef::Postgres(pool) => sqlx::query(
-                "UPDATE host_installation_tokens SET revoked_at_ms = $1 \
+                "UPDATE host_tokens SET revoked_at_ms = $1 \
                      WHERE token_hash = $2 AND revoked_at_ms IS NULL",
             )
             .bind(at_ms)
@@ -1208,7 +1184,7 @@ impl HostInstallationTokensRepository for StoreBackedHostInstallationTokensRepos
         };
         affected
             .map_err(|e| BackendError::StoreQuery {
-                operation: "host_installation_tokens.revoke".into(),
+                operation: "host_tokens.revoke".into(),
                 message: e.to_string(),
             })
             .map(|n| n == 1)
@@ -1223,8 +1199,8 @@ fn convert_pair_row_to_host_link(row: store::host_links::PairRow, acl_json: &str
     HostLinkRow {
         pair_id: row.pair_id,
         account_id: row.mobile_account_id,
-        host_installation_id: row.host_device_id.to_string(),
-        linked_via_installation_id: row.paired_via_device_id.to_string(),
+        host_device_id: row.host_device_id.to_string(),
+        linked_via_device_id: row.paired_via_device_id.to_string(),
         link_display_name: None,
         acl_json: acl_json.to_string(),
         paired_at_ms: row.paired_at_ms,
@@ -1240,18 +1216,18 @@ impl HostLinksRepository for StoreBackedHostLinksRepository {
     async fn insert(
         &self,
         account_id: &str,
-        host_installation_id: &str,
+        host_device_id: &str,
         linked_via: &str,
         _display_name: Option<&str>,
         acl_json: &str,
         at_ms: i64,
     ) -> Result<HostLinkRow, BackendError> {
-        let host_id = Uuid::parse_str(host_installation_id)
-            .map(DeviceId)
-            .map_err(|e| BackendError::StoreDecode {
-                column: "host_installation_id".into(),
+        let host_id = Uuid::parse_str(host_device_id).map(DeviceId).map_err(|e| {
+            BackendError::StoreDecode {
+                column: "host_device_id".into(),
                 message: e.to_string(),
-            })?;
+            }
+        })?;
         let via_id =
             Uuid::parse_str(linked_via)
                 .map(DeviceId)
@@ -1263,25 +1239,21 @@ impl HostLinksRepository for StoreBackedHostLinksRepository {
         Ok(HostLinkRow {
             pair_id: Uuid::new_v4().to_string(),
             account_id: account_id.to_string(),
-            host_installation_id: host_installation_id.to_string(),
-            linked_via_installation_id: linked_via.to_string(),
+            host_device_id: host_device_id.to_string(),
+            linked_via_device_id: linked_via.to_string(),
             link_display_name: None,
             acl_json: acl_json.to_string(),
             paired_at_ms: at_ms,
         })
     }
 
-    async fn exists(
-        &self,
-        account_id: &str,
-        host_installation_id: &str,
-    ) -> Result<bool, BackendError> {
-        let host_id = Uuid::parse_str(host_installation_id)
-            .map(DeviceId)
-            .map_err(|e| BackendError::StoreDecode {
-                column: "host_installation_id".into(),
+    async fn exists(&self, account_id: &str, host_device_id: &str) -> Result<bool, BackendError> {
+        let host_id = Uuid::parse_str(host_device_id).map(DeviceId).map_err(|e| {
+            BackendError::StoreDecode {
+                column: "host_device_id".into(),
                 message: e.to_string(),
-            })?;
+            }
+        })?;
         store::host_links::exists(&self.store, host_id, account_id).await
     }
 
@@ -1293,16 +1265,13 @@ impl HostLinksRepository for StoreBackedHostLinksRepository {
             .collect())
     }
 
-    async fn list_for_host(
-        &self,
-        host_installation_id: &str,
-    ) -> Result<Vec<HostLinkRow>, BackendError> {
-        let host_id = Uuid::parse_str(host_installation_id)
-            .map(DeviceId)
-            .map_err(|e| BackendError::StoreDecode {
-                column: "host_installation_id".into(),
+    async fn list_for_host(&self, host_device_id: &str) -> Result<Vec<HostLinkRow>, BackendError> {
+        let host_id = Uuid::parse_str(host_device_id).map(DeviceId).map_err(|e| {
+            BackendError::StoreDecode {
+                column: "host_device_id".into(),
                 message: e.to_string(),
-            })?;
+            }
+        })?;
         let rows = store::host_links::list_accounts_for_host(&self.store, host_id).await?;
         Ok(rows
             .into_iter()
@@ -1315,17 +1284,13 @@ impl HostLinksRepository for StoreBackedHostLinksRepository {
         Ok(rows.first().map(|r| r.host_device_id.to_string()))
     }
 
-    async fn remove(
-        &self,
-        account_id: &str,
-        host_installation_id: &str,
-    ) -> Result<bool, BackendError> {
-        let host_id = Uuid::parse_str(host_installation_id)
-            .map(DeviceId)
-            .map_err(|e| BackendError::StoreDecode {
-                column: "host_installation_id".into(),
+    async fn remove(&self, account_id: &str, host_device_id: &str) -> Result<bool, BackendError> {
+        let host_id = Uuid::parse_str(host_device_id).map(DeviceId).map_err(|e| {
+            BackendError::StoreDecode {
+                column: "host_device_id".into(),
                 message: e.to_string(),
-            })?;
+            }
+        })?;
         let deleted = store::host_links::delete_pair(&self.store, host_id, account_id).await?;
         Ok(deleted == 1)
     }
@@ -2214,7 +2179,7 @@ impl AuditRepository for StoreBackedAuditRepository {
         &self,
         actor_kind: &str,
         account_id: Option<&str>,
-        installation_id: Option<&str>,
+        device_id: Option<&str>,
         event_type: &str,
         metadata: Option<&str>,
         at_ms: i64,
@@ -2224,13 +2189,13 @@ impl AuditRepository for StoreBackedAuditRepository {
             StorePoolRef::Sqlite(pool) => {
                 sqlx::query(
                     "INSERT INTO audit_events \
-                     (audit_id, actor_kind, account_id, installation_id, event_type, metadata, at_ms) \
+                     (audit_id, actor_kind, account_id, device_id, event_type, metadata, at_ms) \
                      VALUES (?, ?, ?, ?, ?, ?, ?)",
                 )
                 .bind(&audit_id)
                 .bind(actor_kind)
                 .bind(account_id)
-                .bind(installation_id)
+                .bind(device_id)
                 .bind(event_type)
                 .bind(metadata)
                 .bind(at_ms)
@@ -2244,13 +2209,13 @@ impl AuditRepository for StoreBackedAuditRepository {
             StorePoolRef::Postgres(pool) => {
                 sqlx::query(
                     "INSERT INTO audit_events \
-                     (audit_id, actor_kind, account_id, installation_id, event_type, metadata, at_ms) \
+                     (audit_id, actor_kind, account_id, device_id, event_type, metadata, at_ms) \
                      VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)",
                 )
                 .bind(&audit_id)
                 .bind(actor_kind)
                 .bind(account_id)
-                .bind(installation_id)
+                .bind(device_id)
                 .bind(event_type)
                 .bind(metadata)
                 .bind(at_ms)
@@ -2266,7 +2231,7 @@ impl AuditRepository for StoreBackedAuditRepository {
             audit_id,
             actor_kind: actor_kind.to_string(),
             account_id: account_id.map(str::to_string),
-            installation_id: installation_id.map(str::to_string),
+            device_id: device_id.map(str::to_string),
             event_type: event_type.to_string(),
             metadata: metadata.map(str::to_string),
             at_ms,
@@ -2293,7 +2258,7 @@ impl AuditRepository for StoreBackedAuditRepository {
                         i64,
                     ),
                 >(
-                    "SELECT audit_id, actor_kind, account_id, installation_id, \
+                    "SELECT audit_id, actor_kind, account_id, device_id, \
                             event_type, metadata, at_ms \
                        FROM audit_events \
                       WHERE account_id = ? AND at_ms >= ? \
@@ -2315,7 +2280,7 @@ impl AuditRepository for StoreBackedAuditRepository {
                             audit_id,
                             actor_kind,
                             account_id,
-                            installation_id,
+                            device_id,
                             event_type,
                             metadata,
                             at_ms,
@@ -2323,7 +2288,7 @@ impl AuditRepository for StoreBackedAuditRepository {
                             audit_id,
                             actor_kind,
                             account_id,
-                            installation_id,
+                            device_id,
                             event_type,
                             metadata,
                             at_ms,
@@ -2344,7 +2309,7 @@ impl AuditRepository for StoreBackedAuditRepository {
                         i64,
                     ),
                 >(
-                    "SELECT audit_id, actor_kind, account_id, installation_id, \
+                    "SELECT audit_id, actor_kind, account_id, device_id, \
                      event_type, metadata::text, at_ms \
                      FROM audit_events \
                      WHERE account_id = $1 AND at_ms >= $2 \
@@ -2367,7 +2332,7 @@ impl AuditRepository for StoreBackedAuditRepository {
                                 audit_id,
                                 actor_kind,
                                 account_id: acc_id,
-                                installation_id: inst_id,
+                                device_id: inst_id,
                                 event_type,
                                 metadata,
                                 at_ms,
@@ -2393,7 +2358,7 @@ impl PushTokensRepository for StoreBackedPushTokensRepository {
     async fn upsert(
         &self,
         account_id: &str,
-        installation_id: &str,
+        device_id: &str,
         kind: &str,
         token: &str,
         locale: Option<&str>,
@@ -2402,7 +2367,7 @@ impl PushTokensRepository for StoreBackedPushTokensRepository {
         let row = store::push_tokens::upsert(
             &self.store,
             account_id,
-            installation_id,
+            device_id,
             kind,
             token,
             locale,
@@ -2412,7 +2377,7 @@ impl PushTokensRepository for StoreBackedPushTokensRepository {
         Ok(PushTokenRow {
             token_hash: row.token_hash,
             account_id: row.account_id,
-            installation_id: row.installation_id,
+            device_id: row.device_id,
             kind: row.kind,
             locale: row.locale,
             created_at_ms: row.created_at_ms,
@@ -2432,7 +2397,7 @@ impl PushTokensRepository for StoreBackedPushTokensRepository {
             .map(|r| PushTokenRow {
                 token_hash: r.token_hash,
                 account_id: r.account_id,
-                installation_id: r.installation_id,
+                device_id: r.device_id,
                 kind: r.kind,
                 locale: r.locale,
                 created_at_ms: r.created_at_ms,
@@ -2451,7 +2416,7 @@ impl PushTokensRepository for StubPushTokensRepository {
     async fn upsert(
         &self,
         _account_id: &str,
-        _installation_id: &str,
+        _device_id: &str,
         _kind: &str,
         _token: &str,
         _locale: Option<&str>,

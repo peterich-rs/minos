@@ -55,7 +55,7 @@ async fn retired_pairing_routes_return_404() {
         post(
             &mut app,
             "/v1/pairing/revoke",
-            json!({"host_installation_id": host_id.to_string()}),
+            json!({"host_device_id": host_id.to_string()}),
         )
         .await,
         StatusCode::NOT_FOUND

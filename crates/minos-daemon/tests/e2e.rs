@@ -228,12 +228,7 @@ async fn register_formal_host(relay: &Relay, host_id: DeviceId) -> anyhow::Resul
         )
         .await;
     };
-    store::device_installations::set_account_id(
-        &relay.state.store,
-        &mobile_id,
-        &account.account_id,
-    )
-    .await?;
+    store::devices::set_account_id(&relay.state.store, &mobile_id, &account.account_id).await?;
 
     let linked = relay
         .state
@@ -282,7 +277,7 @@ async fn pair_and_list_clis_over_relay() -> anyhow::Result<()> {
         .header("content-type", "application/json")
         .header("authorization", format!("Bearer {}", paired.bearer))
         .body(axum::body::Body::from(
-            json!({ "host_installation_id": host_id.to_string() }).to_string(),
+            json!({ "host_device_id": host_id.to_string() }).to_string(),
         ))?;
     let (status, body) = send_http(&relay, request).await;
     if status != axum::http::StatusCode::OK {

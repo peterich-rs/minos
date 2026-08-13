@@ -30,7 +30,7 @@ async fn postgres_migration_applies_parity_tables() {
 
     for table in [
         "accounts",
-        "device_installations",
+        "devices",
         "projects",
         "project_members",
         "audit_events",

@@ -40,8 +40,8 @@ async fn pg_strict_installation_check_and_projects_archive() {
     // Strict CHECK: host without key must fail.
     let bad_host = DeviceId::new();
     let host_fail = sqlx::query(
-        r#"INSERT INTO device_installations
-            (installation_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id)
+        r#"INSERT INTO devices
+            (device_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id)
            VALUES ($1, 'host', 'bad', NULL, 1, 1, NULL)"#,
     )
     .bind(bad_host.to_string())
@@ -55,8 +55,8 @@ async fn pg_strict_installation_check_and_projects_archive() {
     // Strict CHECK: client without account_id must fail.
     let bad_client = DeviceId::new();
     let client_fail = sqlx::query(
-        r#"INSERT INTO device_installations
-            (installation_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id)
+        r#"INSERT INTO devices
+            (device_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id)
            VALUES ($1, 'mobile', 'bad', NULL, 1, 1, NULL)"#,
     )
     .bind(bad_client.to_string())
@@ -69,7 +69,7 @@ async fn pg_strict_installation_check_and_projects_archive() {
 
     // Strict host + client.
     let host = DeviceId::new();
-    store::device_installations::insert_host_with_public_key(
+    store::devices::insert_host_with_public_key(
         &store,
         host,
         "pg-host",
@@ -79,7 +79,7 @@ async fn pg_strict_installation_check_and_projects_archive() {
     .await
     .unwrap();
     let client = DeviceId::new();
-    store::device_installations::insert_client_for_account(
+    store::devices::insert_client_for_account(
         &store,
         client,
         "pg-phone",

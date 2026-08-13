@@ -26,7 +26,7 @@ pub enum BackendError {
     /// A row returned by the store failed to parse back into a domain type.
     ///
     /// The store writes ids/kinds as TEXT and parses on read
-    /// (see `store/device_installations.rs`). Corrupt rows — or schema drift
+    /// (see `store/devices.rs`). Corrupt rows — or schema drift
     /// between migrations and domain types — surface here.
     #[error("store decode failed for column `{column}`: {message}")]
     StoreDecode { column: String, message: String },
@@ -65,10 +65,10 @@ pub enum BackendError {
 
     /// Host installation is already linked to a different account.
     ///
-    /// Enforced by `UNIQUE (host_installation_id)` on `host_links` and by
+    /// Enforced by `UNIQUE (host_device_id)` on `host_links` and by
     /// in-transaction exclusivity checks (Host Link + QR confirm).
     #[error("host already linked to another account")]
-    HostLinkedElsewhere { host_installation_id: String },
+    HostLinkedElsewhere { host_device_id: String },
 
     /// HS256 JWT signing failed (e.g. malformed key).
     #[error("jwt sign error: {message}")]

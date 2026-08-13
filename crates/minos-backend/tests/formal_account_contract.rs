@@ -4,7 +4,7 @@ use minos_backend::auth::jwt;
 use minos_backend::http;
 use minos_backend::http::test_support::{backend_state, TEST_JWT_SECRET};
 use minos_backend::store::test_support::{insert_test_client, insert_test_host};
-use minos_backend::store::{device_installations, host_links};
+use minos_backend::store::{devices, host_links};
 use minos_domain::{DeviceId, DeviceRole};
 use serde_json::json;
 
@@ -35,16 +35,14 @@ async fn post_json(
 async fn formal_realtime_ws_ticket_uses_account_bearer_without_device_headers() {
     let state = backend_state().await;
     let mut app = http::router(state.clone());
-    let installation_id = uuid::Uuid::new_v4().to_string();
-    let device_id = uuid::Uuid::parse_str(&installation_id)
-        .map(DeviceId)
-        .unwrap();
+    let device_id = DeviceId::new();
+    let device_id_str = device_id.to_string();
 
     let account = minos_backend::store::accounts::create(&state.store, "formal-ticket@example.com")
         .await
         .unwrap();
     let account_id = account.account_id.clone();
-    device_installations::insert_client_for_account(
+    devices::insert_client_for_account(
         &state.store,
         device_id,
         "browser",
@@ -54,17 +52,17 @@ async fn formal_realtime_ws_ticket_uses_account_bearer_without_device_headers() 
     )
     .await
     .unwrap();
-    device_installations::touch_last_seen(&state.store, &device_id, 100)
+    devices::touch_last_seen(&state.store, &device_id, 100)
         .await
         .unwrap();
-    let access = jwt::sign(TEST_JWT_SECRET.as_bytes(), &account_id, &installation_id).unwrap();
+    let access = jwt::sign(TEST_JWT_SECRET.as_bytes(), &account_id, &device_id_str).unwrap();
 
     let auth_header = format!("Bearer {access}");
     let (status, body) = post_json(
         &mut app,
         "/v1/realtime/ws-ticket",
         &[("authorization", &auth_header)],
-        json!({"installation_id": installation_id.clone()}),
+        json!({"device_id": device_id_str.clone()}),
     )
     .await;
 
@@ -78,8 +76,8 @@ async fn formal_realtime_ws_ticket_uses_account_bearer_without_device_headers() 
     let ticket = body["data"]["ticket"].as_str().unwrap();
     let claims = jwt::verify_ws_ticket(TEST_JWT_SECRET.as_bytes(), ticket).unwrap();
     assert_eq!(claims.sub, account_id);
-    assert_eq!(claims.did, installation_id);
-    let row = device_installations::get_device(&state.store, device_id)
+    assert_eq!(claims.did, device_id_str);
+    let row = devices::get_device(&state.store, device_id)
         .await
         .unwrap()
         .unwrap();
@@ -113,7 +111,7 @@ async fn formal_hosts_list_uses_account_bearer_without_device_headers() {
         )
         .await;
     };
-    device_installations::set_account_id(&state.store, &mobile, &account.account_id)
+    devices::set_account_id(&state.store, &mobile, &account.account_id)
         .await
         .unwrap();
     host_links::insert_pair(&state.store, host, &account.account_id, mobile, 123)
@@ -145,7 +143,7 @@ async fn formal_hosts_list_uses_account_bearer_without_device_headers() {
     assert_eq!(body["meta"]["request_id"], "req_contract_test");
     let hosts = body["data"]["hosts"].as_array().unwrap();
     assert_eq!(hosts.len(), 1);
-    assert_eq!(hosts[0]["host_installation_id"], host.to_string());
+    assert_eq!(hosts[0]["host_device_id"], host.to_string());
     assert_eq!(hosts[0]["host_display_name"], "Mac Studio");
     assert_eq!(hosts[0]["linked_at_ms"], 123);
     assert_eq!(hosts[0]["online"], false);

@@ -10,13 +10,13 @@ async fn connect_creates_tables_and_migrates() {
 
     // Latest-only schema: host link tables without QR pairing_codes/tokens.
     for table in [
-        "device_installations",
+        "devices",
         "accounts",
         "host_links",
         "agent_sessions",
         "agent_turns",
         "agent_turn_events",
-        "host_installation_tokens",
+        "host_tokens",
         "host_commands",
         "durable_event_log",
         "outbox_events",

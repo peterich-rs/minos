@@ -431,8 +431,8 @@ async fn dispatch_event(
                 tracing::info!(
                     topic,
                     online = payload.get("online").and_then(|v| v.as_bool()),
-                    installation_id = payload
-                        .get("installation_id")
+                    device_id = payload
+                        .get("device_id")
                         .and_then(|v| v.as_str())
                         .unwrap_or(""),
                     principal_kind = payload

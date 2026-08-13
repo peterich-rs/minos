@@ -122,7 +122,7 @@ pub enum TopicParseError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnectionPrincipal {
     Account { account_id: String },
-    Host { host_installation_id: String },
+    Host { host_device_id: String },
 }
 
 impl ConnectionPrincipal {
@@ -417,13 +417,13 @@ pub enum PresencePrincipalKind {
     AccountClient,
 }
 
-/// Live presence of one installation. Delivered as
+/// Live presence of one device. Delivered as
 /// `StreamEvent { kind: "presence", payload }` on interested topics
 /// (`account:{id}` for host presence, `host:{id}` for account-client presence).
 /// Ephemeral: cold path is HTTP list with `online` + `last_seen_at_ms`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PresencePayload {
-    pub installation_id: String,
+    pub device_id: String,
     pub principal_kind: PresencePrincipalKind,
     pub online: bool,
     pub last_seen_at_ms: i64,
@@ -552,7 +552,7 @@ pub enum DurableEvent {
     /// Account roster: host paired (T2 digest on `account:{id}`).
     HostLinked {
         account_id: String,
-        host_installation_id: String,
+        host_device_id: String,
         pair_id: String,
         at_ms: i64,
         /// Display name for immediate list upsert without HTTP.
@@ -562,7 +562,7 @@ pub enum DurableEvent {
     /// Account roster: host unlinked (T2 digest on `account:{id}`).
     HostUnlinked {
         account_id: String,
-        host_installation_id: String,
+        host_device_id: String,
         at_ms: i64,
     },
     /// Social graph: friend request created / accepted / rejected (T2 on account).
@@ -581,7 +581,7 @@ pub enum DurableEvent {
         conversation_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         project_id: Option<String>,
-        host_installation_id: String,
+        host_device_id: String,
         agent_id: String,
         at_ms: i64,
     },
@@ -679,13 +679,13 @@ pub enum DurableEvent {
         at_ms: i64,
     },
     HostForceClose {
-        host_installation_id: String,
+        host_device_id: String,
         reason: String,
         at_ms: i64,
     },
     HostCommandIssued {
         command_id: String,
-        host_installation_id: String,
+        host_device_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         agent_session_id: Option<String>,
         method: String,
@@ -808,14 +808,10 @@ impl DurableEvent {
             | Self::ProjectArchived { project_id, .. } => {
                 RealtimeTopic::Project(project_id.clone())
             }
-            Self::HostForceClose {
-                host_installation_id,
-                ..
+            Self::HostForceClose { host_device_id, .. }
+            | Self::HostCommandIssued { host_device_id, .. } => {
+                RealtimeTopic::Host(host_device_id.clone())
             }
-            | Self::HostCommandIssued {
-                host_installation_id,
-                ..
-            } => RealtimeTopic::Host(host_installation_id.clone()),
         }
     }
 }
@@ -898,7 +894,7 @@ mod tests {
             topic: "account:abc".into(),
             topic_seq: 7,
             kind: "host_linked".into(),
-            payload: serde_json::json!({"host_installation_id": "host-1"}),
+            payload: serde_json::json!({"host_device_id": "host-1"}),
             event_id: "evt-1".into(),
         };
         let json = serde_json::to_string(&frame).unwrap();
@@ -1137,7 +1133,7 @@ mod tests {
     fn durable_event_round_trip() {
         let event = DurableEvent::HostCommandIssued {
             command_id: "cmd-1".into(),
-            host_installation_id: "host-1".into(),
+            host_device_id: "host-1".into(),
             agent_session_id: Some("sess-1".into()),
             method: "start_agent".into(),
             params: serde_json::json!({"agent": "codex"}),
